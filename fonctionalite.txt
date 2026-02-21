@@ -1,0 +1,52 @@
+2. Fonctionnalités de Gestion des Accès (Login & Rôles)
+Système de Login : Authentification par Email et Password.
+
+Hiérarchie des rôles :
+
+Admin/Staff : Accès total (Scan, statistiques, gestion).
+
+Bénévoles (Volontario) : Accès temporaire au scanner uniquement.
+
+Autorisation temporaire (48h) : Possibilité pour un Admin d'autoriser un compte "Volontario" à scanner. Cette autorisation doit expirer automatiquement après 48h (gestion via un timestamp d'expiration).
+
+3. Fonctionnalités de Scan & Check-in (Le "Cœur")
+Scanner QR Code : Utilisation de la caméra du smartphone pour lire le Codice_QR.
+
+Validation instantanée :
+
+Vérifier si le membre existe.
+
+Vérifier si le Stato est bien "ATTIVO".
+
+Empêcher les scans en double pour la même journée (Anti-double scan).
+
+Enregistrement des passages : Chaque scan réussi doit être enregistré dans une table de logs (passaggi) avec :
+
+ID du membre.
+
+Heure précise.
+
+Numéro du passage de la journée (Compteur journalier : 1, 2, 3...).
+
+4. Interface Utilisateur (Vue "Passages")
+Affichage en temps réel : Liste des derniers membres scannés aujourd'hui.
+
+Données persistantes : Contrairement à l'app actuelle, le nom ne doit jamais disparaître après le scan ou après un rafraîchissement (nécessite une base de données temps réel).
+
+Feedback visuel : Notification immédiate (Toast) de succès ou d'erreur (Membre inactif, déjà scanné, etc.).
+
+5. Système de Communication (Emails)
+Volume : Capacité d'envoyer plus de 200 emails par jour.
+
+Automatisation : Envoi automatique du QR Code lors de l'inscription ou manuellement depuis le dashboard.
+
+Fiabilité : Utilisation d'un service pro (API) pour éviter les spams et les lenteurs de script.
+
+6. Exigences Techniques (Performance & Hébergement)
+Rapidité : Réponse du scan en moins d'une seconde (Suppression de la lenteur Google Sheets).
+
+Zéro Cache : Mise à jour instantanée des données sur tous les appareils connectés.
+
+Hébergement : 100% gratuit (GitHub pour le code, Vercel pour le déploiement, Supabase pour la DB).
+
+Sécurité : Protection des données sensibles et des clés API.

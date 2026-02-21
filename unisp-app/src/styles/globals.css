@@ -1,0 +1,65 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&display=swap');
+@import "tailwindcss";
+
+body, button, input {
+    font-family: 'Inter', sans-serif !important;
+}
+
+@theme {
+  --color-unisp-blue: #3b82f6;
+  --color-unisp-bg: #0f172a;
+  --color-unisp-glass: rgba(30, 41, 59, 0.7);
+}
+
+body {
+  font-family: 'Inter', sans-serif;
+  background-color: #0f172a; /* Le bleu nuit de ta capture */
+  color: #f8fafc;
+  margin: 0;
+}
+
+body, button, input {
+    font-family: 'Inter', sans-serif !important;
+}
+
+.glass {
+  background: rgba(30, 41, 59, 0.7);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.attivo-bg {
+  background: linear-gradient(135deg, #16a34a 0%, #064e3b 100%) !important;
+}
+
+.inattivo-bg {
+  background: linear-gradient(135deg, #dc2626 0%, #7f1d1d 100%) !important;
+}
+
+.already-bg {
+  background: linear-gradient(135deg, #0277bd 0%, #01579b 100%) !important;
+}
+
+.passage-num {
+  font-size: 4rem;
+  font-weight: 900;
+  color: #ffeb3b;
+  line-height: 1;
+}
+
+@keyframes slideIn {
+  from { opacity: 0; transform: translateY(-10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.glass { animation: slideIn 0.3s ease-out; }
+
+/* Cacher la barre de défilement pour tous les navigateurs */
+.no-scrollbar::-webkit-scrollbar {
+    display: none;
+}
+.no-scrollbar {
+    -ms-overflow-style: none;  /* IE and Edge */
+    scrollbar-width: none;  /* Firefox */
+}
+

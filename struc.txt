@@ -1,0 +1,14 @@
+├── src/
+│   ├── components/          # Les morceaux réutilisables de l'interface
+│   │   ├── Layout.js        # La structure globale (Barre de navigation en bas)
+│   │   ├── Scanner.js       # Le moteur de la caméra et du scan QR
+│   │   ├── MemberCard.js    # L'affichage joli des infos d'un membre
+│   │   └── StatusToast.js   # Les petites alertes de succès ou d'erreur
+│   ├── pages/               # Les pages réelles de ton site
+│   │   ├── _app.js          # Configuration globale de Next.js
+│   │   ├── index.js         # Page de Login (première page vue)
+│   │   ├── dashboard.js     # Page principale (Scanner + Liste des passages)
+│   │   └── admin.js         # Gestion de la base membres (Admin uniquement)
+│   └── api/                 # Le Backend (Cerveau caché)
+│       ├── scan.js          # Logique de vérification du QR et enregistrement
+│       └── send-email.js    # Logique d'envoi d'email via Resend/Brevo
