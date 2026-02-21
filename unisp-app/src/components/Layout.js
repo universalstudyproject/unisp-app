@@ -21,6 +21,7 @@ export default function Layout({ children }) {
 
     const logout = () => {
         localStorage.removeItem('unisp_user');
+        localStorage.removeItem('active_tab');
         router.push('/');
     };
 

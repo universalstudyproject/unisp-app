@@ -4,6 +4,10 @@ import { Html5Qrcode } from "html5-qrcode";
 import { supabase } from "@/lib/supabase";
 import { useRouter } from "next/router";
 
+// Import dei sotto-componenti
+import AdminView from "@/components/dashboard/AdminView";
+import PassaggiView from "@/components/dashboard/PassaggiView";
+
 export default function Dashboard() {
   const router = useRouter();
   const [mounted, setMounted] = useState(false);
@@ -21,8 +25,7 @@ export default function Dashboard() {
   const [manualCode, setManualCode] = useState("");
   const [modalAlert, setModalAlert] = useState(null);
 
-  // --- FUNZIONI ---
-
+  // --- LOGICA DATI ---
   const fetchPassaggiOggi = async () => {
     const startOfDay = new Date();
     startOfDay.setHours(0, 0, 0, 0);
@@ -40,7 +43,7 @@ export default function Dashboard() {
     const { data } = await supabase
       .from("membres")
       .select("*")
-      .order("cognome", { ascending: true }); // ORDINAMENTO PER COGNOME
+      .order("cognome", { ascending: true });
     if (data) setMembres(data);
   };
 
@@ -60,12 +63,20 @@ export default function Dashboard() {
   const revokeVolontaire = async (id) => {
     await supabase
       .from("membres")
-      .update({
-        auth_scan_active: false,
-        auth_scan_expires_at: null,
-      })
+      .update({ auth_scan_active: false, auth_scan_expires_at: null })
       .eq("id", id);
     fetchMembres();
+  };
+
+  const isAuthValid = (m) =>
+    m.auth_scan_active && new Date(m.auth_scan_expires_at) > new Date();
+
+  const showFeedback = (name, bgColor, message, icon) => {
+    let glowColor = "shadow-blue-500/50";
+    if (bgColor.includes("green")) glowColor = "shadow-green-500/50";
+    if (bgColor.includes("red")) glowColor = "shadow-red-500/50";
+    setFeedback({ name, bgColor, message, icon, glowColor });
+    setTimeout(() => setFeedback(null), 4000);
   };
 
   const handleScanSuccess = async (qrCode) => {
@@ -83,11 +94,10 @@ export default function Dashboard() {
       );
 
     const nomComplet = `${membre.nome} ${membre.cognome}`;
-    const s = membre.stato?.toUpperCase();
-    if (s !== "ATTIVO") {
+    if (membre.stato?.toUpperCase() !== "ATTIVO") {
       let color = "bg-red-600/90";
-      if (s === "SOSPESO") color = "bg-yellow-600/90";
-      return showFeedback(nomComplet, color, s, "🔒");
+      if (membre.stato?.toUpperCase() === "SOSPESO") color = "bg-yellow-600/90";
+      return showFeedback(nomComplet, color, membre.stato.toUpperCase(), "🔒");
     }
 
     const startOfDay = new Date();
@@ -124,14 +134,6 @@ export default function Dashboard() {
     }, 200);
   };
 
-  const showFeedback = (name, bgColor, message, icon) => {
-    let glowColor = "shadow-blue-500/50";
-    if (bgColor.includes("green")) glowColor = "shadow-green-500/50";
-    if (bgColor.includes("red")) glowColor = "shadow-red-500/50";
-    setFeedback({ name, bgColor, message, icon, glowColor });
-    setTimeout(() => setFeedback(null), 4000);
-  };
-
   const startScanner = () => {
     if (user?.tipologia_socio?.toUpperCase() === "VOLONTARIO") {
       const now = new Date();
@@ -153,35 +155,33 @@ export default function Dashboard() {
 
   // --- EFFETTI ---
   useEffect(() => {
-    const init = async () => {
-      // On décale légèrement l'exécution pour éviter le rendu en cascade synchrone
-      setMounted(true);
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setMounted(true);
 
-      const savedTab = localStorage.getItem("active_tab");
-      if (savedTab) setActiveTab(savedTab);
+    const storedUser = localStorage.getItem("unisp_user");
+    if (storedUser) {
+      const parsed = JSON.parse(storedUser);
+      setUser(parsed);
 
-      const storedUser = localStorage.getItem("unisp_user");
-      if (storedUser) {
-        const parsed = JSON.parse(storedUser);
-        setUser(parsed);
-        // On charge les membres seulement après avoir confirmé qu'il est STAFF
-        if (parsed?.tipologia_socio?.toUpperCase() === "STAFF") {
-          fetchMembres();
-        }
+      if (parsed?.tipologia_socio?.toUpperCase() !== "STAFF") {
+        setActiveTab("passages");
+      } else {
+        const savedTab = localStorage.getItem("active_tab");
+        if (savedTab) setActiveTab(savedTab);
+        fetchMembres();
       }
+    }
 
-      fetchPassaggiOggi();
-    };
-
-    init();
-
+    fetchPassaggiOggi();
     const interval = setInterval(fetchPassaggiOggi, 10000);
     return () => clearInterval(interval);
   }, []);
 
   useEffect(() => {
-    if (mounted) localStorage.setItem("active_tab", activeTab);
-  }, [activeTab, mounted]);
+    if (mounted && user?.tipologia_socio?.toUpperCase() === "STAFF") {
+      localStorage.setItem("active_tab", activeTab);
+    }
+  }, [activeTab, mounted, user]);
 
   useEffect(() => {
     let html5QrCode;
@@ -211,28 +211,24 @@ export default function Dashboard() {
 
   if (!mounted) return <div className="min-h-screen bg-[#0f172a]" />;
 
-  // --- LOGICA FILTRAGGIO ---
+  // Filtraggio Membri
   const filteredMembres = membres.filter((m) => {
     const matchesSearch = `${m.nome} ${m.cognome}`
       .toLowerCase()
       .includes(searchTerm.toLowerCase());
-    const now = new Date();
-    const isAuthValid =
-      m.auth_scan_active && new Date(m.auth_scan_expires_at) > now;
-
     if (filter === "ALL") return matchesSearch;
     if (filter === "STAFF")
       return matchesSearch && m.tipologia_socio?.toUpperCase() === "STAFF";
     if (filter === "VOLONTARIO")
       return matchesSearch && m.tipologia_socio?.toUpperCase() === "VOLONTARIO";
-    if (filter === "ACCESSI") return matchesSearch && isAuthValid;
+    if (filter === "ACCESSI") return matchesSearch && isAuthValid(m);
     return matchesSearch;
   });
 
   return (
     <Layout>
       <div className="space-y-6">
-        <nav className="flex justify-around mb-6 border-slate-800">
+        <nav className="flex justify-around mb-6 border-b border-slate-800">
           <button
             onClick={() => setActiveTab("passages")}
             className={`pb-3 px-6 font-black uppercase text-[10px] tracking-widest transition-all ${activeTab === "passages" ? "border-b-2 border-blue-500 text-blue-500" : "text-slate-500"}`}
@@ -250,151 +246,23 @@ export default function Dashboard() {
         </nav>
 
         {activeTab === "passages" ? (
-          <div className="space-y-3">
-            {passaggi.length === 0 ? (
-              <p className="text-center text-slate-600 py-10 italic">
-                Nessun passaggio oggi
-              </p>
-            ) : (
-              passaggi.map((p) => (
-                <div
-                  key={p.id}
-                  className="glass p-4 rounded-2xl flex justify-between items-center border-l-4 border-blue-500 shadow-lg bg-white/5"
-                >
-                  <div className="flex flex-col">
-                    <span className="font-bold text-white text-sm">
-                      {p.membres?.nome} {p.membres?.cognome}
-                    </span>
-                    <span className="text-[10px] text-slate-500 font-mono">
-                      {new Date(p.scanned_at).toLocaleTimeString("it-IT", {
-                        hour: "2-digit",
-                        minute: "2-digit",
-                      })}
-                    </span>
-                  </div>
-                  <span className="bg-blue-600 text-white text-[11px] px-3 py-1 rounded-lg font-black italic">
-                    N° {p.numero_giornaliero}
-                  </span>
-                </div>
-              ))
-            )}
-          </div>
+          <PassaggiView passaggi={passaggi} />
         ) : (
-          <div className="space-y-6">
-            <h1 className="text-white font-black text-2xl uppercase tracking-tighter">
-              Membri
-            </h1>
-            <input
-              type="text"
-              placeholder="Cerca nome o cognome..."
-              className="w-full bg-slate-800 border border-slate-700 rounded-2xl px-5 py-4 text-white outline-none focus:ring-2 focus:ring-blue-500 font-bold"
-              onChange={(e) => setSearchTerm(e.target.value)}
-            />
-
-            <div className="grid grid-cols-2 gap-2">
-              {["ALL", "STAFF", "VOLONTARIO", "ACCESSI"].map((f) => (
-                <button
-                  key={f}
-                  onClick={() => setFilter(f)}
-                  className={`py-3 rounded-xl text-[10px] font-black uppercase tracking-widest border transition-all ${filter === f ? "bg-blue-600 border-blue-500 text-white shadow-lg shadow-blue-600/30" : "bg-white/5 border-white/10 text-slate-400"}`}
-                >
-                  {f}
-                </button>
-              ))}
-            </div>
-
-            <div className="space-y-3">
-              {filteredMembres.map((m) => {
-                const s = m.stato?.toUpperCase() || "INATTIVO";
-                const isAuth =
-                  m.auth_scan_active &&
-                  new Date(m.auth_scan_expires_at) > new Date();
-                const isCompactMode =
-                  filter === "VOLONTARIO" || filter === "ACCESSI";
-
-                let bStyle = "bg-blue-500/10 text-blue-400 border-blue-500/20";
-                let dotColor = "bg-blue-500";
-                if (s === "ATTIVO") {
-                  bStyle = "bg-green-500/10 text-green-400 border-green-500/20";
-                  dotColor = "bg-green-500";
-                } else if (s === "SOSPESO") {
-                  bStyle =
-                    "bg-yellow-500/10 text-yellow-400 border-yellow-500/20";
-                  dotColor = "bg-yellow-500";
-                } else if (s === "ESCLUSO") {
-                  bStyle = "bg-red-500/10 text-red-400 border-red-500/20";
-                  dotColor = "bg-red-500";
-                }
-
-                return (
-                  <div
-                    key={m.id}
-                    className="glass p-5 rounded-[2rem] border border-white/5 shadow-xl"
-                  >
-                    <div className="flex justify-between items-center">
-                      <div
-                        className="cursor-pointer flex flex-col"
-                        onClick={() => setSelectedMembre(m)}
-                      >
-                        <span className="text-white font-light uppercase text-sm leading-tight">
-                          {m.nome}
-                        </span>
-                        <span className="text-blue-500 font-black uppercase text-sm leading-tight">
-                          {m.cognome}
-                        </span>
-                        {!isCompactMode && (
-                          <p className="text-[9px] text-slate-500 font-black uppercase tracking-widest mt-1">
-                            {m.tipologia_socio}
-                          </p>
-                        )}
-                      </div>
-                      <div className="flex items-center">
-                        {isCompactMode ? (
-                          s !== "ATTIVO" ? (
-                            <div
-                              className={`flex items-center gap-2 px-3 py-1.5 rounded-full border ${bStyle} backdrop-blur-md`}
-                            >
-                              <span
-                                className={`w-1.5 h-1.5 rounded-full animate-pulse ${dotColor}`}
-                              ></span>
-                              <span className="text-[10px] font-black uppercase leading-none">
-                                {s}
-                              </span>
-                            </div>
-                          ) : (
-                            <button
-                              onClick={() =>
-                                isAuth
-                                  ? revokeVolontaire(m.id)
-                                  : authorizeVolontaire(m.id)
-                              }
-                              className={`px-6 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${isAuth ? "bg-red-500/10 text-red-500 border border-red-500/20" : "bg-blue-600 text-white shadow-lg shadow-blue-600/30"}`}
-                            >
-                              {isAuth ? "REVOCA" : "SCAN"}
-                            </button>
-                          )
-                        ) : (
-                          <div
-                            className={`flex items-center gap-2 px-3 py-1.5 rounded-full border ${bStyle} backdrop-blur-md`}
-                          >
-                            <span
-                              className={`w-1.5 h-1.5 rounded-full animate-pulse ${dotColor}`}
-                            ></span>
-                            <span className="text-[10px] font-black uppercase leading-none">
-                              {s}
-                            </span>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
+          <AdminView
+            membres={filteredMembres}
+            filter={filter}
+            setFilter={setFilter}
+            searchTerm={searchTerm}
+            setSearchTerm={setSearchTerm}
+            setSelectedMembre={setSelectedMembre}
+            isAuthValid={isAuthValid}
+            authorizeVolontaire={authorizeVolontaire}
+            revokeVolontaire={revokeVolontaire}
+          />
         )}
       </div>
 
+      {/* --- PULSANTE SCAN FLOTTANTE (Ora è qui!) --- */}
       {!scanning && (
         <button
           onClick={startScanner}
@@ -417,6 +285,7 @@ export default function Dashboard() {
         </button>
       )}
 
+      {/* --- OVERLAYS --- */}
       {scanning && (
         <div className="fixed inset-0 bg-[#0f172a] z-[200] flex flex-col items-center">
           <div className="p-6 w-full flex justify-between items-center bg-slate-900/80 text-white border-b border-white/5">
@@ -520,6 +389,7 @@ export default function Dashboard() {
         </div>
       )}
 
+      {/* --- MODALE DETTAGLI MEMBRO --- */}
       {selectedMembre && (
         <div className="fixed inset-0 bg-slate-950/90 backdrop-blur-md z-[400] flex items-center justify-center p-4">
           <div className="glass w-full max-w-md rounded-[2.5rem] border border-white/10 flex flex-col overflow-hidden max-h-[85vh]">
