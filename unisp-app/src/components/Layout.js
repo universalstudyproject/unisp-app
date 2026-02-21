@@ -1,20 +1,22 @@
 import React, { useEffect, useState } from 'react';
 import { useRouter } from 'next/router';
-import Link from 'next/link';
 
 export default function Layout({ children }) {
     const router = useRouter();
     const [user, setUser] = useState(null);
 
     useEffect(() => {
-        const storedUser = localStorage.getItem('unisp_user');
-        if (storedUser) {
-            try {
-                setUser(JSON.parse(storedUser));
-            } catch (e) {
-                console.error("Erreur de parsing user", e);
+        const loadUser = () => {
+            const storedUser = localStorage.getItem('unisp_user');
+            if (storedUser) {
+                try {
+                    setUser(JSON.parse(storedUser));
+                } catch (e) {
+                    console.error("Errore parsing user", e);
+                }
             }
-        }
+        };
+        loadUser();
     }, [router.pathname]);
 
     const logout = () => {
@@ -22,48 +24,29 @@ export default function Layout({ children }) {
         router.push('/');
     };
 
-    const isStaff = user?.tipologia_socio?.toUpperCase() === 'STAFF';
-
     return (
         <div className="min-h-screen bg-[#0f172a] text-slate-100 font-inter">
-            <header className="p-6 flex flex-col gap-4 border-b border-white/5 bg-[#0f172a]/80 backdrop-blur-md sticky top-0 z-[100]">
-                <div className="flex justify-between items-center">
-                    <h1 className="text-lg font-black tracking-tighter text-white italic">
-                        UNISP <span className="text-blue-500 font-light not-italic text-sm tracking-normal">PRO+</span>
-                    </h1>
-                    {/* Bouton Logout TOUJOURS présent */}
-                    <button
-                        onClick={logout}
-                        className="text-[10px] font-black text-red-500 border border-red-500/30 px-3 py-1.5 rounded-xl uppercase tracking-widest hover:bg-red-500/10 transition-colors"
-                    >
-                        Logout
-                    </button>
-                </div>
+            <header className="p-6 flex justify-between items-center border-b border-white/5 bg-[#0f172a]/80 backdrop-blur-md sticky top-0 z-[100]">
+                {/* LOGO */}
+                <h1 className="text-lg font-black tracking-tighter text-white italic">
+                    UNISP <span className="text-blue-500 font-light not-italic text-sm tracking-normal">PRO+</span>
+                </h1>
 
-                <nav className="flex gap-6 mt-2">
-                    {isStaff ? (
-                        <>
-                            <Link href="/dashboard" className={`text-[10px] font-black uppercase tracking-[0.2em] ${router.pathname === '/dashboard' ? 'text-blue-500' : 'text-slate-500'}`}>
-                                Scanner
-                            </Link>
-                            <Link href="/admin" className={`text-[10px] font-black uppercase tracking-[0.2em] ${router.pathname === '/admin' ? 'text-blue-500' : 'text-slate-500'}`}>
-                                Administration
-                            </Link>
-                        </>
-                    ) : (
-                        <span className="text-[10px] font-black uppercase tracking-[0.2em] text-blue-500">
-                            Session de pointage
-                        </span>
-                    )}
-                </nav>
+                {/* BOTTONE ESCI */}
+                <button
+                    onClick={logout}
+                    className="text-[10px] font-black text-red-500 border border-red-500/30 px-3 py-1.5 rounded-xl uppercase tracking-widest hover:bg-red-500/10 transition-colors"
+                >
+                    Esci
+                </button>
             </header>
 
             <main className="max-w-md mx-auto px-4 pt-6 pb-32">
                 {children}
             </main>
 
-            {/* Bouton flottant masqué sur Dashboard ET Admin */}
-            {router.pathname !== '/dashboard' && router.pathname !== '/admin' && (
+            {/* Pulsante flottante scanner (mostrato solo se non siamo già in dashboard con lo scanner aperto) */}
+            {router.pathname !== '/dashboard' && (
                 <button
                     onClick={() => router.push('/dashboard?autoStart=true')}
                     className="fixed bottom-8 right-8 w-16 h-16 bg-blue-600 rounded-full flex items-center justify-center shadow-[0_0_30px_-5px_rgba(37,99,235,0.5)] active:scale-90 transition-all z-50 border border-white/10"
