@@ -9,8 +9,6 @@ export default function Login() {
   const [error, setError] = useState("");
   const [isShaking, setIsShaking] = useState(false);
   const router = useRouter();
-
-  // Inizializzazione basata su localStorage per evitare sfarfallii
   const [isChecking, setIsChecking] = useState(true);
 
   useEffect(() => {
@@ -21,6 +19,31 @@ export default function Login() {
       setIsChecking(false);
     }
   }, [router]);
+
+  // --- FUNZIONE DI LOGGING ---
+  const createLog = async (
+    action,
+    operatorId,
+    operatorName,
+    details,
+    targetId = null,
+    targetName = null,
+  ) => {
+    try {
+      await supabase.from("logs").insert([
+        {
+          action,
+          operator_id: operatorId,
+          operator_name: operatorName,
+          details,
+          target_id: targetId,
+          target_name: targetName,
+        },
+      ]);
+    } catch (err) {
+      console.error("Errore durante il salvataggio del log:", err);
+    }
+  };
 
   const attemptLogin = async (e) => {
     e.preventDefault();
@@ -34,9 +57,24 @@ export default function Login() {
         .ilike("email", email.trim())
         .single();
 
+      // LOG FALLIMENTO: Utente non trovato o password errata
       if (dbError || !data || data.password !== password) {
+        await createLog(
+          "LOGIN_FAILED",
+          null,
+          "SYSTEM",
+          `Tentativo di accesso fallito per l'email: ${email.trim()}`,
+        );
         throw new Error("Credenziali non valide");
       }
+
+      // LOG SUCCESSO
+      await createLog(
+        "LOGIN_SUCCESS",
+        data.id,
+        `${data.nome} ${data.cognome}`,
+        `Accesso effettuato correttamente (${data.tipologia_socio})`,
+      );
 
       localStorage.setItem("unisp_user", JSON.stringify(data));
       router.replace("/dashboard");
@@ -48,7 +86,6 @@ export default function Login() {
     }
   };
 
-  // Se stiamo controllando la sessione, mostriamo solo lo sfondo blu
   if (isChecking) return <div className="min-h-screen bg-[#0f172a]" />;
 
   return (
@@ -59,9 +96,7 @@ export default function Login() {
         <h1 className="text-2xl font-black italic text-white uppercase tracking-tighter">
           UNISP <span className="text-blue-500 font-light">SYSTEM</span>
         </h1>
-
         <p className="text-slate-400 text-sm italic">Effettua l&apos;accesso</p>
-
         <form onSubmit={attemptLogin} className="space-y-4">
           <input
             type="email"
@@ -85,7 +120,6 @@ export default function Login() {
             className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-4 text-white focus:ring-2 focus:ring-blue-500 outline-none transition-all placeholder:text-slate-500"
             required
           />
-
           <div
             className={`overflow-hidden transition-all duration-300 ${error ? "max-h-12 opacity-100" : "max-h-0 opacity-0"}`}
           >
@@ -95,7 +129,6 @@ export default function Login() {
               </p>
             </div>
           </div>
-
           <button
             type="submit"
             disabled={loading}
@@ -105,7 +138,6 @@ export default function Login() {
           </button>
         </form>
       </div>
-
       <style jsx>{`
         @keyframes shake {
           0%,
