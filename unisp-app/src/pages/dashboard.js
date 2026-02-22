@@ -15,6 +15,7 @@ export default function Dashboard() {
   const [membres, setMembres] = useState([]);
   const [activeTab, setActiveTab] = useState("passages");
   const [user, setUser] = useState(null);
+  const [isProcessing, setIsProcessing] = useState(false);
 
   const [searchTerm, setSearchTerm] = useState("");
   const [filter, setFilter] = useState("ALL");
@@ -24,6 +25,29 @@ export default function Dashboard() {
   const [manualInput, setManualInput] = useState(false);
   const [manualCode, setManualCode] = useState("");
   const [modalAlert, setModalAlert] = useState(null);
+
+  // --- LOGICA INVIO MAIL ---
+  const [showSuccess, setShowSuccess] = useState(false);
+  const [countSent, setCountSent] = useState(0);
+
+  const handleBulkSend = async () => {
+    setIsProcessing(true);
+    try {
+      const res = await fetch("/api/send-bulk-qr", { method: "POST" });
+      const data = await res.json();
+      if (data.success) {
+        setCountSent(data.count);
+        setShowSuccess(true);
+        fetchMembres(); // Rinfresca la lista per vedere i flag mail_sent aggiornati
+      } else {
+        alert(data.message || "Nessun nuovo QR da inviare.");
+      }
+    } catch (e) {
+      alert("Errore invio");
+    } finally {
+      setIsProcessing(false);
+    }
+  };
 
   // --- LOGICA DATI ---
   const fetchPassaggiOggi = async () => {
@@ -82,7 +106,7 @@ export default function Dashboard() {
   const handleScanSuccess = async (qrCode) => {
     const { data: membre } = await supabase
       .from("membres")
-      .select("id, nome, cognome, stato")
+      .select("id, nome, cognome, stato, email")
       .eq("codice_qr", qrCode.trim())
       .single();
     if (!membre)
@@ -108,6 +132,7 @@ export default function Dashboard() {
       .eq("membre_id", membre.id)
       .gt("scanned_at", startOfDay.toISOString())
       .maybeSingle();
+
     if (checkRecent)
       return showFeedback(
         nomComplet,
@@ -116,22 +141,45 @@ export default function Dashboard() {
         "ℹ️",
       );
 
-    await supabase.from("passaggi").insert([{ membre_id: membre.id }]);
-    setTimeout(async () => {
-      const { data: finalData } = await supabase
-        .from("passaggi")
-        .select("numero_giornaliero")
-        .eq("membre_id", membre.id)
-        .gt("scanned_at", startOfDay.toISOString())
-        .single();
-      showFeedback(
-        nomComplet,
-        "bg-green-500/90",
-        `ENTRATA VALIDA N° ${finalData?.numero_giornaliero || "??"}`,
-        "✅",
-      );
-      fetchPassaggiOggi();
-    }, 200);
+    // 2. Registriamo il passaggio
+    const { error: insertError } = await supabase
+      .from("passaggi")
+      .insert([{ membre_id: membre.id }]);
+
+    if (!insertError) {
+      setTimeout(async () => {
+        const { data: finalData } = await supabase
+          .from("passaggi")
+          .select("numero_giornaliero")
+          .eq("membre_id", membre.id)
+          .gt("scanned_at", startOfDay.toISOString())
+          .single();
+
+        const nGiorno = finalData?.numero_giornaliero || "??";
+
+        showFeedback(
+          `${membre.nome} ${membre.cognome}`,
+          "bg-green-500/90",
+          `ENTRATA VALIDA N° ${nGiorno}`,
+          "✅",
+        );
+
+        fetchPassaggiOggi();
+
+        // 3. INVIO MAIL DI NOTIFICA IN BACKGROUND
+        if (membre.email) {
+          fetch("/api/notify-entry", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              email: membre.email,
+              nome: membre.nome,
+              numero_giornaliero: nGiorno,
+            }),
+          }).catch((err) => console.error("Errore notifica mail:", err));
+        }
+      }, 200);
+    }
   };
 
   const startScanner = () => {
@@ -157,12 +205,10 @@ export default function Dashboard() {
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setMounted(true);
-
     const storedUser = localStorage.getItem("unisp_user");
     if (storedUser) {
       const parsed = JSON.parse(storedUser);
       setUser(parsed);
-
       if (parsed?.tipologia_socio?.toUpperCase() !== "STAFF") {
         setActiveTab("passages");
       } else {
@@ -171,7 +217,6 @@ export default function Dashboard() {
         fetchMembres();
       }
     }
-
     fetchPassaggiOggi();
     const interval = setInterval(fetchPassaggiOggi, 10000);
     return () => clearInterval(interval);
@@ -211,7 +256,8 @@ export default function Dashboard() {
 
   if (!mounted) return <div className="min-h-screen bg-[#0f172a]" />;
 
-  // Filtraggio Membri
+  const isStaff = user?.tipologia_socio?.toUpperCase() === "STAFF";
+
   const filteredMembres = membres.filter((m) => {
     const matchesSearch = `${m.nome} ${m.cognome}`
       .toLowerCase()
@@ -228,19 +274,52 @@ export default function Dashboard() {
   return (
     <Layout>
       <div className="space-y-6">
-        <nav className="flex justify-around mb-6 border-b border-slate-800">
-          <button
-            onClick={() => setActiveTab("passages")}
-            className={`pb-3 px-6 font-black uppercase text-[10px] tracking-widest transition-all ${activeTab === "passages" ? "border-b-2 border-blue-500 text-blue-500" : "text-slate-500"}`}
-          >
-            Passaggi
-          </button>
-          {user?.tipologia_socio?.toUpperCase() === "STAFF" && (
+        {/* NAV BAR DESIGN "PILL" */}
+        <nav className="bg-slate-900/90 border border-white/10 backdrop-blur-xl h-14 rounded-full px-2 flex items-center shadow-2xl sticky top-2 z-[90]">
+          <div className="w-10 h-10 rounded-full bg-white flex items-center justify-center ml-1 flex-shrink-0 shadow-lg">
+            <span className="text-slate-900 text-lg font-black italic">U</span>
+          </div>
+
+          <div className="flex grow justify-center gap-6 px-2">
             <button
-              onClick={() => setActiveTab("membres")}
-              className={`pb-3 px-6 font-black uppercase text-[10px] tracking-widest transition-all ${activeTab === "membres" ? "border-b-2 border-blue-500 text-blue-500" : "text-slate-500"}`}
+              onClick={() => setActiveTab("passages")}
+              className={`text-[10px] font-black uppercase tracking-widest transition-all ${activeTab === "passages" ? "text-blue-500 scale-110" : "text-slate-500"}`}
             >
-              Admin
+              Passaggi
+            </button>
+            {isStaff && (
+              <>
+                <button
+                  onClick={() => setActiveTab("membres")}
+                  className={`text-[10px] font-black uppercase tracking-widest transition-all ${activeTab === "membres" ? "text-blue-500 scale-110" : "text-slate-500"}`}
+                >
+                  Admin
+                </button>
+                <button className="text-[10px] font-black uppercase tracking-widest text-slate-700 cursor-not-allowed">
+                  Stat
+                </button>
+              </>
+            )}
+          </div>
+
+          {isStaff && activeTab === "membres" && (
+            <button
+              onClick={handleBulkSend}
+              disabled={isProcessing}
+              className="h-10 w-10 rounded-full bg-blue-600 text-white flex items-center justify-center flex-shrink-0 transition-all active:scale-90 shadow-lg shadow-blue-600/20 mr-1"
+            >
+              {isProcessing ? (
+                <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
+              ) : (
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  className="h-4 w-4 rotate-45"
+                  viewBox="0 0 20 20"
+                  fill="currentColor"
+                >
+                  <path d="M10.894 2.553a1 1 0 00-1.788 0l-7 14a1 1 0 001.169 1.409l5-1.429A1 1 0 009 15.571V11a1 1 0 112 0v4.571a1 1 0 00.725.962l5 1.428a1 1 0 001.17-1.408l-7-14z" />
+                </svg>
+              )}
             </button>
           )}
         </nav>
@@ -262,7 +341,7 @@ export default function Dashboard() {
         )}
       </div>
 
-      {/* --- PULSANTE SCAN FLOTTANTE (Ora è qui!) --- */}
+      {/* PULSANTE SCAN FLOTTANTE */}
       {!scanning && (
         <button
           onClick={startScanner}
@@ -285,7 +364,51 @@ export default function Dashboard() {
         </button>
       )}
 
-      {/* --- OVERLAYS --- */}
+      {/* MODALE DI SUCCESSO JOLIE */}
+      {showSuccess && (
+        <div className="fixed inset-0 z-[1000] flex items-center justify-center p-6">
+          <div
+            className="absolute inset-0 bg-slate-950/80 backdrop-blur-xl animate-in fade-in duration-300"
+            onClick={() => setShowSuccess(false)}
+          ></div>
+          <div className="relative bg-[#1e293b] border border-white/10 w-full max-w-sm rounded-[3rem] p-10 text-center shadow-[0_0_50px_-12px_rgba(59,130,246,0.5)] animate-in zoom-in-95 duration-300">
+            <div className="w-20 h-20 bg-green-500 rounded-full flex items-center justify-center mx-auto mb-6 shadow-[0_0_30px_rgba(34,197,94,0.4)]">
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                className="h-10 w-10 text-white"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth="4"
+                  d="M5 13l4 4L19 7"
+                />
+              </svg>
+            </div>
+            <h2 className="text-white font-black text-2xl uppercase tracking-tighter mb-2">
+              Email Inviate!
+            </h2>
+            <p className="text-slate-400 text-sm mb-8 leading-relaxed">
+              Operazione completata con successo.
+              <br />
+              Abbiamo inviato{" "}
+              <span className="text-blue-400 font-black">{countSent}</span>{" "}
+              codici QR.
+            </p>
+            <button
+              onClick={() => setShowSuccess(false)}
+              className="w-full bg-blue-600 py-4 rounded-2xl font-black text-white uppercase tracking-widest shadow-lg shadow-blue-600/20 active:scale-95 transition-all"
+            >
+              Ottimo!
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* OVERLAYS (Scanner, Feedback, Alert, Dettagli) */}
       {scanning && (
         <div className="fixed inset-0 bg-[#0f172a] z-[200] flex flex-col items-center">
           <div className="p-6 w-full flex justify-between items-center bg-slate-900/80 text-white border-b border-white/5">
@@ -389,7 +512,6 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* --- MODALE DETTAGLI MEMBRO --- */}
       {selectedMembre && (
         <div className="fixed inset-0 bg-slate-950/90 backdrop-blur-md z-[400] flex items-center justify-center p-4">
           <div className="glass w-full max-w-md rounded-[2.5rem] border border-white/10 flex flex-col overflow-hidden max-h-[85vh]">
@@ -417,10 +539,15 @@ export default function Dashboard() {
                     "codice_qr",
                     "auth_scan_active",
                     "auth_scan_expires_at",
+                    "mail_sent",
                   ].includes(k)
                 )
                   return null;
                 if (!v) return null;
+
+                // Controlliamo se il valore è un link (inizia con http o https)
+                const isLink = typeof v === "string" && v.startsWith("http");
+
                 return (
                   <div
                     key={k}
@@ -429,9 +556,21 @@ export default function Dashboard() {
                     <p className="text-[9px] uppercase text-blue-400 font-black mb-1">
                       {k.replace(/_/g, " ")}
                     </p>
-                    <p className="text-slate-100 text-sm font-medium">
-                      {String(v)}
-                    </p>
+
+                    {isLink ? (
+                      <a
+                        href={v}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-blue-400 text-sm font-medium underline break-all hover:text-blue-300 transition-colors"
+                      >
+                        Visualizza Documento →
+                      </a>
+                    ) : (
+                      <p className="text-slate-100 text-sm font-medium">
+                        {String(v)}
+                      </p>
+                    )}
                   </div>
                 );
               })}
