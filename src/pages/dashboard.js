@@ -246,10 +246,20 @@ export default function Dashboard() {
     fetchAlimenti();
     fetchStoricoPassaggi();
 
-    // 3. Gestione tasto indietro (Opzionale ma consigliato per mobile)
-    window.history.pushState(null, null, window.location.pathname);
+    // 1. Diciamo al browser che stiamo entrando in una "nuova pagina" virtuale
+    window.history.pushState({ tab: activeTab }, "");
+
     const handleBackButton = () => {
-      window.history.pushState(null, null, window.location.pathname);
+      // Se l'utente preme indietro e NON si trova sulla scheda principale
+      if (activeTab !== "passages") {
+        setActiveTab("passages"); // Torna alla scheda Passaggi
+        // Rimette lo stato per impedire la chiusura dell'app al prossimo tocco
+        window.history.pushState({ tab: "passages" }, "");
+      } else {
+        // Se è già su Passaggi, lasciamo che il browser gestisca il ritorno
+        // (o blocchiamolo di nuovo per sicurezza)
+        window.history.pushState({ tab: "passages" }, "");
+      }
     };
     window.addEventListener("popstate", handleBackButton);
 
