@@ -220,25 +220,45 @@ export default function Dashboard() {
 
   // --- EFFETTI ---
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setMounted(true);
     const storedUser = localStorage.getItem("unisp_user");
-    if (storedUser) {
-      const parsed = JSON.parse(storedUser);
-      setUser(parsed);
-      if (parsed?.tipologia_socio?.toUpperCase() !== "STAFF") {
-        setActiveTab("passages");
-      } else {
-        const savedTab = localStorage.getItem("active_tab");
-        if (savedTab) setActiveTab(savedTab);
-        fetchMembres();
-      }
+
+    if (!storedUser) {
+      // 1. Usa REPLACE invece di PUSH per non "sporcare" la cronologia
+      router.replace("/");
+      return; // Ferma l'esecuzione se non c'è l'utente
     }
+
+    // 2. Gestione utente loggato
+    const parsed = JSON.parse(storedUser);
+    setUser(parsed);
+
+    if (parsed?.tipologia_socio?.toUpperCase() !== "STAFF") {
+      setActiveTab("passages");
+    } else {
+      const savedTab = localStorage.getItem("active_tab");
+      if (savedTab) setActiveTab(savedTab);
+      fetchMembres();
+    }
+
+    // Caricamento dati iniziali
     fetchPassaggiOggi();
     fetchAlimenti();
     fetchStoricoPassaggi();
+
+    // 3. Gestione tasto indietro (Opzionale ma consigliato per mobile)
+    window.history.pushState(null, null, window.location.pathname);
+    const handleBackButton = () => {
+      window.history.pushState(null, null, window.location.pathname);
+    };
+    window.addEventListener("popstate", handleBackButton);
+
     const interval = setInterval(fetchPassaggiOggi, 10000);
-    return () => clearInterval(interval);
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener("popstate", handleBackButton);
+    };
   }, []);
 
   useEffect(() => {

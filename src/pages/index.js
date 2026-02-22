@@ -34,7 +34,7 @@ export default function Login() {
 
     // Salvataggio utente in locale e reindirizzamento
     localStorage.setItem('unisp_user', JSON.stringify(data));
-    router.push('/dashboard');
+    router.replace('/dashboard');
   };
 
   return (
