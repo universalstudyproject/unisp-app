@@ -196,7 +196,7 @@ export default function StatsView({
       {/* 2. GRID: STATO (PIE) & TIPOLOGIA (BAR) */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         <div className="glass p-6 rounded-[2.5rem] border border-white/10 bg-white/5 h-80 flex flex-col">
-          <h3 className="text-white text-[10px] font-black uppercase tracking-widest text-center mb-4 opacity-50 text-emerald-400">Salute del Club (Stato)</h3>
+          <h3 className="text-white text-[10px] font-black uppercase tracking-widest text-center mb-4 opacity-50 text-emerald-400">Stato</h3>
           <ResponsiveContainer width="100%" height="100%">
             <PieChart>
               <Pie data={dataStati} innerRadius={60} outerRadius={80} paddingAngle={8} dataKey="value">
@@ -224,7 +224,7 @@ export default function StatsView({
       {/* 3. GRID: STUDENTI (DONUT) & ALIMENTI (RADAR) */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         <div className="glass p-6 rounded-[2.5rem] border border-white/10 bg-white/5 h-80 flex flex-col">
-          <h3 className="text-white text-[10px] font-black uppercase tracking-widest text-center mb-4 opacity-50 text-purple-400">Status Studente</h3>
+          <h3 className="text-white text-[10px] font-black uppercase tracking-widest text-center mb-4 opacity-50 text-purple-400">Studente?</h3>
           <ResponsiveContainer width="100%" height="100%">
             <PieChart>
               <Pie data={dataStudenti} innerRadius={0} outerRadius={70} dataKey="value">
@@ -256,7 +256,7 @@ export default function StatsView({
         </div>
         <div className="glass p-6 rounded-[2.5rem] border border-white/10 bg-red-500/5 space-y-4 shadow-xl">
           {inRischio.length === 0 ? (
-            <p className="text-center text-slate-500 text-[10px] font-black uppercase py-6 tracking-widest">Nessuna criticità rilevata ✨</p>
+            <p className="text-center text-slate-500 text-[10px] font-black uppercase py-6 tracking-widest">Nessuna criticità rilevata</p>
           ) : (
             inRischio.map((m, i) => (
               <div key={i} className="space-y-2">
@@ -279,9 +279,9 @@ export default function StatsView({
           <div className="w-20 h-20 bg-blue-600/10 rounded-full flex items-center justify-center mx-auto mb-6 transition-transform group-hover:scale-110 shadow-2xl">
             <span className="text-3xl">📁</span>
           </div>
-          <p className="text-slate-500 text-[10px] uppercase font-black tracking-widest mb-8">Gestione Archivio Digitale Alimenti</p>
+          <p className="text-slate-500 text-[10px] uppercase font-black tracking-widest mb-8">Archivio Alimenti</p>
           <label className={`w-full max-w-xs cursor-pointer ${isUploading ? "bg-slate-800" : "bg-blue-600 hover:bg-blue-500 shadow-2xl shadow-blue-600/30"} text-white py-5 px-10 rounded-[2rem] font-black text-[10px] uppercase tracking-widest transition-all inline-block active:scale-95`}>
-            {isUploading ? "Analisi File..." : "Aggiorna Database"}
+            {isUploading ? "Analisi File..." : "Inserisci il csv"}
             <input type="file" accept=".csv" onChange={handleFileUpload} className="hidden" disabled={isUploading} />
           </label>
         </div>

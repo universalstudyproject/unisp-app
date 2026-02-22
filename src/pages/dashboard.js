@@ -130,6 +130,31 @@ export default function Dashboard() {
     setTimeout(() => setFeedback(null), 4000);
   };
 
+  // --- LOGICA AGGIORNAMENTO MEMBRO ---
+  const updateMembreField = async (membreId, field, newValue) => {
+    setIsProcessing(true);
+    try {
+      const { error } = await supabase
+        .from("membres")
+        .update({ [field]: newValue })
+        .eq("id", membreId);
+
+      if (error) throw error;
+
+      // Aggiorna lo stato locale per riflettere il cambiamento immediatamente
+      setMembres((prev) =>
+        prev.map((m) => (m.id === membreId ? { ...m, [field]: newValue } : m)),
+      );
+
+      // Aggiorna anche il membro selezionato nel modale
+      setSelectedMembre((prev) => ({ ...prev, [field]: newValue }));
+    } catch (err) {
+      alert("Errore durante l'aggiornamento: " + err.message);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
   const handleScanSuccess = async (qrCode) => {
     const { data: membre } = await supabase
       .from("membres")
@@ -242,8 +267,10 @@ export default function Dashboard() {
     setUser(parsed);
 
     // Caricamento dati (solo al primo avvio)
+    const authorizedRoles = ["STAFF", "ADMIN"];
     if (membres.length === 0) {
-      if (parsed?.tipologia_socio?.toUpperCase() === "STAFF") fetchMembres();
+      if (authorizedRoles.includes(parsed?.tipologia_socio?.toUpperCase()))
+        fetchMembres();
       fetchPassaggiOggi();
       fetchAlimenti();
       fetchStoricoPassaggi();
@@ -295,7 +322,7 @@ export default function Dashboard() {
   ]);
 
   useEffect(() => {
-    if (mounted && user?.tipologia_socio?.toUpperCase() === "STAFF") {
+    if (mounted && (user?.tipologia_socio?.toUpperCase() === "STAFF" || user?.tipologia_socio?.toUpperCase() === "ADMIN")) {
       localStorage.setItem("active_tab", activeTab);
     }
   }, [activeTab, mounted, user]);
@@ -328,7 +355,7 @@ export default function Dashboard() {
 
   if (!mounted) return <div className="min-h-screen bg-[#0f172a]" />;
 
-  const isStaff = user?.tipologia_socio?.toUpperCase() === "STAFF";
+  const isStaff = (user?.tipologia_socio?.toUpperCase() === "STAFF") || (user?.tipologia_socio?.toUpperCase() === "ADMIN");
 
   const filteredMembres = membres.filter((m) => {
     const matchesSearch = `${m.nome} ${m.cognome}`
@@ -336,7 +363,7 @@ export default function Dashboard() {
       .includes(searchTerm.toLowerCase());
     if (filter === "ALL") return matchesSearch;
     if (filter === "STAFF")
-      return matchesSearch && m.tipologia_socio?.toUpperCase() === "STAFF";
+      return matchesSearch && (m.tipologia_socio?.toUpperCase() === "STAFF" || m.tipologia_socio?.toUpperCase() === "ADMIN");
     if (filter === "VOLONTARIO")
       return matchesSearch && m.tipologia_socio?.toUpperCase() === "VOLONTARIO";
     if (filter === "ACCESSI") return matchesSearch && isAuthValid(m);
@@ -420,6 +447,7 @@ export default function Dashboard() {
             isAuthValid={isAuthValid}
             authorizeVolontaire={authorizeVolontaire}
             revokeVolontaire={revokeVolontaire}
+            updateMembreField={updateMembreField}
           />
         ) : (
           <StatsView
@@ -655,6 +683,7 @@ export default function Dashboard() {
                 &times;
               </button>
             </div>
+
             <div className="p-6 overflow-y-auto space-y-3">
               {Object.entries(selectedMembre).map(([k, v]) => {
                 if (
@@ -671,9 +700,8 @@ export default function Dashboard() {
                   ].includes(k)
                 )
                   return null;
-                if (!v) return null;
+                if (!v && k !== "stato" && k !== "tipologia_socio") return null;
 
-                // Controlliamo se il valore è un link (inizia con http o https)
                 const isLink = typeof v === "string" && v.startsWith("http");
 
                 return (
@@ -685,12 +713,53 @@ export default function Dashboard() {
                       {k.replace(/_/g, " ")}
                     </p>
 
-                    {isLink ? (
+                    {/* LOGICA PER CAMPI EDITABILI */}
+                    {k === "tipologia_socio" ? (
+                      <select
+                        value={v || ""}
+                        onChange={(e) =>
+                          updateMembreField(
+                            selectedMembre.id,
+                            k,
+                            e.target.value,
+                          )
+                        }
+                        className="w-full bg-slate-800 text-white text-sm font-bold p-2 rounded-lg outline-none border border-white/10"
+                      >
+                        {["PASSIVO", "VOLONTARIO", "ADMIN", "STAFF"].map(
+                          (opt) => (
+                            <option key={opt} value={opt}>
+                              {opt}
+                            </option>
+                          ),
+                        )}
+                      </select>
+                    ) : k === "stato" ? (
+                      <select
+                        value={v || ""}
+                        onChange={(e) =>
+                          updateMembreField(
+                            selectedMembre.id,
+                            k,
+                            e.target.value,
+                          )
+                        }
+                        className="w-full bg-slate-800 text-white text-sm font-bold p-2 rounded-lg outline-none border border-white/10"
+                      >
+                        {["ATTIVO", "INATTIVO", "SOSPESO", "ESCLUSO"].map(
+                          (opt) => (
+                            <option key={opt} value={opt}>
+                              {opt}
+                            </option>
+                          ),
+                        )}
+                      </select>
+                    ) : isLink ? (
                       <a
                         href={v}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="text-blue-400 text-sm font-medium underline break-all hover:text-blue-300 transition-colors"
+                        className="text-blue-400 text-sm font-medium underline break-all"
                       >
                         Visualizza Documento →
                       </a>
