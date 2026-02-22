@@ -3,6 +3,8 @@ import Layout from "@/components/Layout";
 import { Html5Qrcode } from "html5-qrcode";
 import { supabase } from "@/lib/supabase";
 import { useRouter } from "next/router";
+import StatsView from "@/components/dashboard/StatsView";
+import Image from "next/image";
 
 // Import dei sotto-componenti
 import AdminView from "@/components/dashboard/AdminView";
@@ -16,6 +18,8 @@ export default function Dashboard() {
   const [activeTab, setActiveTab] = useState("passages");
   const [user, setUser] = useState(null);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [alimenti, setAlimenti] = useState([]);
+  const [storicoPassaggi, setStoricoPassaggi] = useState([]);
 
   const [searchTerm, setSearchTerm] = useState("");
   const [filter, setFilter] = useState("ALL");
@@ -49,6 +53,14 @@ export default function Dashboard() {
     }
   };
 
+  const fetchStoricoPassaggi = async () => {
+    const { data } = await supabase
+      .from("passaggi")
+      .select("membre_id, scanned_at") // Ci servono solo questi per le statistiche
+      .order("scanned_at", { ascending: true });
+    if (data) setStoricoPassaggi(data);
+  };
+
   // --- LOGICA DATI ---
   const fetchPassaggiOggi = async () => {
     const startOfDay = new Date();
@@ -69,6 +81,11 @@ export default function Dashboard() {
       .select("*")
       .order("cognome", { ascending: true });
     if (data) setMembres(data);
+  };
+
+  const fetchAlimenti = async () => {
+    const { data } = await supabase.from("alimenti").select("*");
+    if (data) setAlimenti(data);
   };
 
   const authorizeVolontaire = async (id) => {
@@ -218,6 +235,8 @@ export default function Dashboard() {
       }
     }
     fetchPassaggiOggi();
+    fetchAlimenti();
+    fetchStoricoPassaggi();
     const interval = setInterval(fetchPassaggiOggi, 10000);
     return () => clearInterval(interval);
   }, []);
@@ -276,8 +295,16 @@ export default function Dashboard() {
       <div className="space-y-6">
         {/* NAV BAR DESIGN "PILL" */}
         <nav className="bg-slate-900/90 border border-white/10 backdrop-blur-xl h-14 rounded-full px-2 flex items-center shadow-2xl sticky top-2 z-[90]">
-          <div className="w-10 h-10 rounded-full bg-white flex items-center justify-center ml-1 flex-shrink-0 shadow-lg">
-            <span className="text-slate-900 text-lg font-black italic">U</span>
+          {/* CERCLE BLANC AVEC LOGO OTTIMIZZATO */}
+          <div className="w-10 h-10 rounded-full bg-white flex items-center justify-center ml-1 flex-shrink-0 shadow-lg overflow-hidden relative p-0.5">
+            <Image
+              src="/logo-unisp.png" // Assicurati che il nome sia corretto in /public
+              alt="Logo UNISP"
+              width={40} // Dimensioni di riferimento
+              height={40}
+              className="object-contain p-1"
+              priority // Carica il logo immediatamente (importante per l'LCP)
+            />
           </div>
 
           <div className="flex grow justify-center gap-6 px-2">
@@ -295,7 +322,10 @@ export default function Dashboard() {
                 >
                   Admin
                 </button>
-                <button className="text-[10px] font-black uppercase tracking-widest text-slate-700 cursor-not-allowed">
+                <button
+                  onClick={() => setActiveTab("stats")}
+                  className={`text-[10px] font-black uppercase tracking-widest transition-all ${activeTab === "stats" ? "text-blue-500 scale-110" : "text-slate-500"}`}
+                >
                   Stat
                 </button>
               </>
@@ -326,7 +356,7 @@ export default function Dashboard() {
 
         {activeTab === "passages" ? (
           <PassaggiView passaggi={passaggi} />
-        ) : (
+        ) : activeTab === "membres" ? (
           <AdminView
             membres={filteredMembres}
             filter={filter}
@@ -337,6 +367,13 @@ export default function Dashboard() {
             isAuthValid={isAuthValid}
             authorizeVolontaire={authorizeVolontaire}
             revokeVolontaire={revokeVolontaire}
+          />
+        ) : (
+          <StatsView
+            membres={membres}
+            passaggi={storicoPassaggi}
+            alimentiData={alimenti}
+            setAlimenti={setAlimenti}
           />
         )}
       </div>
