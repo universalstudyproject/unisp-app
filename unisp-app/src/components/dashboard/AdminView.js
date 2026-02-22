@@ -13,7 +13,7 @@ export default function AdminView({
 }) {
   return (
     <div className="space-y-6">
-      <h1 className="text-white font-black text-2xl uppercase tracking-tighter">Membri</h1>
+      {/*<h1 className="text-white font-black text-2xl uppercase tracking-tighter">Membri</h1>*/}
       
       <input
         type="text"

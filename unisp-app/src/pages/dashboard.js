@@ -320,7 +320,7 @@ export default function Dashboard() {
                   onClick={() => setActiveTab("membres")}
                   className={`text-[10px] font-black uppercase tracking-widest transition-all ${activeTab === "membres" ? "text-blue-500 scale-110" : "text-slate-500"}`}
                 >
-                  Admin
+                  Membri
                 </button>
                 <button
                   onClick={() => setActiveTab("stats")}

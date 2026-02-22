@@ -30,7 +30,7 @@ export default function Layout({ children }) {
             <header className="p-6 flex justify-between items-center border-b border-white/5 bg-[#0f172a]/80 backdrop-blur-md sticky top-0 z-[100]">
                 {/* LOGO */}
                 <h1 className="text-lg font-black tracking-tighter text-white italic">
-                    UNISP <span className="text-blue-500 font-light not-italic text-sm tracking-normal">PRO+</span>
+                    UNISP <span className="text-blue-500 font-light not-italic text-sm tracking-normal">SYSTEM</span>
                 </h1>
 
                 {/* BOTTONE ESCI */}
