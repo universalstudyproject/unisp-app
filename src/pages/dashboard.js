@@ -20,6 +20,7 @@ export default function Dashboard() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [alimenti, setAlimenti] = useState([]);
   const [storicoPassaggi, setStoricoPassaggi] = useState([]);
+  const [showExitModal, setShowExitModal] = useState(false);
 
   const [searchTerm, setSearchTerm] = useState("");
   const [filter, setFilter] = useState("ALL");
@@ -51,6 +52,15 @@ export default function Dashboard() {
     } finally {
       setIsProcessing(false);
     }
+  };
+
+  const closeAllModals = () => {
+    setScanning(false);
+    setFeedback(null);
+    setSelectedMembre(null);
+    setModalAlert(null);
+    setShowSuccess(false);
+    setManualInput(false);
   };
 
   const fetchStoricoPassaggi = async () => {
@@ -224,43 +234,48 @@ export default function Dashboard() {
     const storedUser = localStorage.getItem("unisp_user");
 
     if (!storedUser) {
-      // 1. Usa REPLACE invece di PUSH per non "sporcare" la cronologia
       router.replace("/");
-      return; // Ferma l'esecuzione se non c'è l'utente
+      return;
     }
 
-    // 2. Gestione utente loggato
     const parsed = JSON.parse(storedUser);
     setUser(parsed);
 
-    if (parsed?.tipologia_socio?.toUpperCase() !== "STAFF") {
-      setActiveTab("passages");
-    } else {
-      const savedTab = localStorage.getItem("active_tab");
-      if (savedTab) setActiveTab(savedTab);
-      fetchMembres();
+    // Caricamento dati (solo al primo avvio)
+    if (membres.length === 0) {
+      if (parsed?.tipologia_socio?.toUpperCase() === "STAFF") fetchMembres();
+      fetchPassaggiOggi();
+      fetchAlimenti();
+      fetchStoricoPassaggi();
     }
 
-    // Caricamento dati iniziali
-    fetchPassaggiOggi();
-    fetchAlimenti();
-    fetchStoricoPassaggi();
-
-    // 1. Diciamo al browser che stiamo entrando in una "nuova pagina" virtuale
-    window.history.pushState({ tab: activeTab }, "");
-
+    // --- LOGICA TASTO INDIETRO CON CONFERMA USCITA ---
     const handleBackButton = () => {
-      // Se l'utente preme indietro e NON si trova sulla scheda principale
-      if (activeTab !== "passages") {
-        setActiveTab("passages"); // Torna alla scheda Passaggi
-        // Rimette lo stato per impedire la chiusura dell'app al prossimo tocco
-        window.history.pushState({ tab: "passages" }, "");
+      const isAnyModalOpen =
+        scanning ||
+        feedback ||
+        selectedMembre ||
+        modalAlert ||
+        showSuccess ||
+        showExitModal;
+
+      if (isAnyModalOpen) {
+        // Se c'è un modale aperto (incluso quello di uscita), chiudiamo tutto
+        closeAllModals();
+        setShowExitModal(false);
+        window.history.pushState(null, null, window.location.pathname);
+      } else if (activeTab !== "passages") {
+        // Se siamo su un altro tab, torniamo a Passaggi
+        setActiveTab("passages");
+        window.history.pushState(null, null, window.location.pathname);
       } else {
-        // Se è già su Passaggi, lasciamo che il browser gestisca il ritorno
-        // (o blocchiamolo di nuovo per sicurezza)
-        window.history.pushState({ tab: "passages" }, "");
+        // Se siamo su Passaggi e non ci sono modali, chiediamo conferma prima di uscire
+        setShowExitModal(true);
+        window.history.pushState(null, null, window.location.pathname);
       }
     };
+
+    window.history.pushState(null, null, window.location.pathname);
     window.addEventListener("popstate", handleBackButton);
 
     const interval = setInterval(fetchPassaggiOggi, 10000);
@@ -269,7 +284,15 @@ export default function Dashboard() {
       clearInterval(interval);
       window.removeEventListener("popstate", handleBackButton);
     };
-  }, []);
+  }, [
+    activeTab,
+    scanning,
+    feedback,
+    selectedMembre,
+    modalAlert,
+    showSuccess,
+    showExitModal,
+  ]);
 
   useEffect(() => {
     if (mounted && user?.tipologia_socio?.toUpperCase() === "STAFF") {
@@ -575,6 +598,44 @@ export default function Dashboard() {
             >
               Ho capito
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* MODALE DI CONFERMA USCITA */}
+      {showExitModal && (
+        <div className="fixed inset-0 z-[1000] flex items-center justify-center p-6 animate-in fade-in duration-300">
+          <div
+            className="absolute inset-0 bg-slate-950/90 backdrop-blur-xl"
+            onClick={() => setShowExitModal(false)}
+          ></div>
+          <div className="relative glass bg-[#1e293b] border border-white/10 w-full max-w-sm rounded-[3rem] p-10 text-center shadow-2xl">
+            <div className="w-20 h-20 bg-amber-500/20 rounded-full flex items-center justify-center mx-auto mb-6 border border-amber-500/20">
+              <span className="text-4xl">🚪</span>
+            </div>
+            <h2 className="text-white font-black text-2xl uppercase tracking-tighter mb-2">
+              Vuoi uscire?
+            </h2>
+            <p className="text-slate-400 text-sm mb-8 leading-relaxed">
+              Sei sicuro di voler chiudere la sessione di lavoro attuale?
+            </p>
+            <div className="flex flex-col gap-3">
+              <button
+                onClick={() => {
+                  localStorage.removeItem("unisp_user");
+                  window.location.href = "/"; // Forza il ritorno al login e pulisce la cronologia
+                }}
+                className="w-full bg-red-600 py-4 rounded-2xl font-black text-white uppercase tracking-widest shadow-lg shadow-red-600/20 active:scale-95 transition-all"
+              >
+                Sì, Esci
+              </button>
+              <button
+                onClick={() => setShowExitModal(false)}
+                className="w-full bg-white/5 py-4 rounded-2xl font-black text-slate-300 uppercase tracking-widest border border-white/10 active:scale-95 transition-all"
+              >
+                Annulla
+              </button>
+            </div>
           </div>
         </div>
       )}
