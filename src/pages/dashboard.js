@@ -93,28 +93,37 @@ export default function Dashboard() {
   // --- LOGICA AUTOMAZIONE EMAIL (CORRETTA) ---
   const triggerAutoEmail = async (newMembersCount) => {
     if (newMembersCount <= 0) return;
-    
+
     // Logghiamo l'inizio
-    await createLog("EMAIL_AUTO_TRIGGER", `Avviato invio automatico per ${newMembersCount} nuovi membri.`);
+    await createLog(
+      "EMAIL_AUTO_TRIGGER",
+      `Avviato invio automatico per ${newMembersCount} nuovi membri.`,
+    );
 
     // Lanciamo il fetch e NON aspettiamo la risposta con 'await' se vogliamo che vada in background,
     // ma usiamo un segnale per gestire la persistenza.
-    fetch("/api/send-bulk-qr", { 
+    fetch("/api/send-bulk-qr", {
       method: "POST",
-      keepalive: true // <--- Fondamentale: permette alla richiesta di sopravvivere al reload della pagina
+      keepalive: true, // <--- Fondamentale: permette alla richiesta di sopravvivere al reload della pagina
     })
-    .then(async (res) => {
-      const data = await res.json();
-      if (data.success) {
-        await createLog("EMAIL_AUTO_SENT", `Inviati con successo ${data.count} QR Code.`);
-      } else {
-        await createLog("EMAIL_AUTO_ERROR", `Errore API: ${data.message || 'Errore sconosciuto'}`);
-      }
-    })
-    .catch(async (err) => {
-      console.error("Errore automazione:", err);
-      await createLog("EMAIL_AUTO_CRASH", `Crash invio: ${err.message}`);
-    });
+      .then(async (res) => {
+        const data = await res.json();
+        if (data.success) {
+          await createLog(
+            "EMAIL_AUTO_SENT",
+            `Inviati con successo ${data.count} QR Code.`,
+          );
+        } else {
+          await createLog(
+            "EMAIL_AUTO_ERROR",
+            `Errore API: ${data.message || "Errore sconosciuto"}`,
+          );
+        }
+      })
+      .catch(async (err) => {
+        console.error("Errore automazione:", err);
+        await createLog("EMAIL_AUTO_CRASH", `Crash invio: ${err.message}`);
+      });
   };
 
   // --- DOWNLOAD LOG TXT ---
@@ -304,19 +313,39 @@ export default function Dashboard() {
   };
 
   const startScanner = () => {
-    // PROTEZIONE 48H: Solo chi ha isAuthValid può scansionare se è un VOLONTARIO
-    if (user?.tipologia_socio?.toUpperCase() === "VOLONTARIO") {
-      if (!isAuthValid(user)) {
+    // 1. Recuperiamo la tipologia (assicuriamoci che esista)
+    const tipologia = user?.tipologia_socio?.toUpperCase();
+
+    // 2. Se sei ADMIN o STAFF, apri sempre la camera
+    if (tipologia === "ADMIN" || tipologia === "STAFF") {
+      setManualInput(false);
+      setScanning(true);
+      return;
+    }
+
+    // 3. Se sei VOLONTARIO, controlla l'autorizzazione delle 48h
+    if (tipologia === "VOLONTARIO") {
+      if (isAuthValid(user)) {
+        setManualInput(false);
+        setScanning(true);
+      } else {
         setModalAlert({
           title: "ACCESSO NEGATO",
-          message: "Contatta lo staff per maggiori informazioni.",
+          message:
+            "Autorizzazione scaduta o non attiva. Contatta l'amministratore.",
           icon: "🔒",
         });
-        return;
       }
+      return;
     }
-    setManualInput(false);
-    setScanning(true);
+
+    // 4. Per tutti gli altri (PASSIVO, SCONOSCIUTO, ecc.), blocca e NON aprire nulla
+    setModalAlert({
+      title: "NON AUTORIZZATO",
+      message:
+        "Solo lo staff e i volontari autorizzati possono usare lo scanner.",
+      icon: "🚫",
+    });
   };
 
   useEffect(() => {
