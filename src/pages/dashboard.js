@@ -250,11 +250,13 @@ export default function Dashboard() {
   };
 
   const handleScanSuccess = async (qrCode) => {
+    // 1. Cerchiamo il membro tramite QR
     const { data: membre } = await supabase
       .from("membres")
       .select("id, nome, cognome, stato, email")
       .eq("codice_qr", qrCode.trim())
       .single();
+
     if (!membre)
       return setFeedback({
         name: "SCONOSCIUTO",
@@ -262,7 +264,9 @@ export default function Dashboard() {
         message: "QR NON VALIDO",
         icon: "🚫",
       });
+
     const nomComplet = `${membre.nome} ${membre.cognome}`;
+
     if (membre.stato?.toUpperCase() !== "ATTIVO")
       return setFeedback({
         name: nomComplet,
@@ -270,38 +274,66 @@ export default function Dashboard() {
         message: membre.stato.toUpperCase(),
         icon: "🔒",
       });
+
     const startOfDay = new Date();
     startOfDay.setHours(0, 0, 0, 0);
+
+    // 2. Controllo se è già passato oggi
     const { data: check } = await supabase
       .from("passaggi")
       .select("numero_giornaliero")
       .eq("membre_id", membre.id)
       .gt("scanned_at", startOfDay.toISOString())
       .maybeSingle();
+
     if (check)
       return setFeedback({
         name: nomComplet,
         bgColor: "bg-blue-500",
-        message: `GIÀ PASSATO (${check.numero_giornaliero})`,
+        message: `GIÀ PASSATO: N° ${check.numero_giornaliero}`,
         icon: "ℹ️",
       });
-    const { error: insErr } = await supabase
+
+    // 3. Registriamo il nuovo passaggio e CHIEDIAMO di restituire il numero generato
+    const { data: newPassaggio, error: insErr } = await supabase
       .from("passaggi")
-      .insert([{ membre_id: membre.id }]);
-    if (!insErr) {
+      .insert([{ membre_id: membre.id }])
+      .select("numero_giornaliero") // Cruciale per avere il numero subito
+      .single();
+
+    if (!insErr && newPassaggio) {
+      const numero = newPassaggio.numero_giornaliero;
+
+      // 4. Scriviamo il Log
       await createLog(
         "SCAN_SUCCESS",
-        "Ingresso registrato",
+        `Ingresso registrato: N° ${numero}`,
         membre.id,
         nomComplet,
       );
+
+      // 5. AGGIORNAMENTO: Invio email di conferma con numero e data
+      fetch("/api/notify-entry", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: membre.email,
+          nome: membre.nome,
+          numero_giornaliero: numero,
+        }),
+      }).catch((e) => console.error("Errore invio email conferma:", e));
+
+      // 6. Refresh lista locale
       fetchPassaggiOggi();
+
+      // 7. Feedback a schermo con il numero (ripristinato)
       setFeedback({
         name: nomComplet,
         bgColor: "bg-green-600",
-        message: "ENTRATA VALIDA",
+        message: `ENTRATA VALIDA: N° ${numero}`, // Mostra il numero nella notifica
         icon: "✅",
       });
+
       setTimeout(() => setFeedback(null), 4000);
     }
   };
