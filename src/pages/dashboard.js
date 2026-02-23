@@ -89,28 +89,32 @@ export default function Dashboard() {
     }
   };
 
-  // --- LOGICA AUTOMAZIONE EMAIL ---
+  // --- LOGICA AUTOMAZIONE EMAIL (MIGLIORATA) ---
+  // --- LOGICA AUTOMAZIONE EMAIL (CORRETTA) ---
   const triggerAutoEmail = async (newMembersCount) => {
     if (newMembersCount <= 0) return;
-    await createLog(
-      "EMAIL_AUTO_QUEUED",
-      `Inviando QR a ${newMembersCount} nuovi membri tra 60s.`,
-    );
-    setTimeout(async () => {
-      try {
-        const res = await fetch("/api/send-bulk-qr", { method: "POST" });
-        const data = await res.json();
-        if (data.success) {
-          await createLog(
-            "EMAIL_AUTO_SENT",
-            `Inviati ${data.count} QR automaticamente.`,
-          );
-          fetchMembres();
-        }
-      } catch (e) {
-        console.error(e);
+    
+    // Logghiamo l'inizio
+    await createLog("EMAIL_AUTO_TRIGGER", `Avviato invio automatico per ${newMembersCount} nuovi membri.`);
+
+    // Lanciamo il fetch e NON aspettiamo la risposta con 'await' se vogliamo che vada in background,
+    // ma usiamo un segnale per gestire la persistenza.
+    fetch("/api/send-bulk-qr", { 
+      method: "POST",
+      keepalive: true // <--- Fondamentale: permette alla richiesta di sopravvivere al reload della pagina
+    })
+    .then(async (res) => {
+      const data = await res.json();
+      if (data.success) {
+        await createLog("EMAIL_AUTO_SENT", `Inviati con successo ${data.count} QR Code.`);
+      } else {
+        await createLog("EMAIL_AUTO_ERROR", `Errore API: ${data.message || 'Errore sconosciuto'}`);
       }
-    }, 60000);
+    })
+    .catch(async (err) => {
+      console.error("Errore automazione:", err);
+      await createLog("EMAIL_AUTO_CRASH", `Crash invio: ${err.message}`);
+    });
   };
 
   // --- DOWNLOAD LOG TXT ---

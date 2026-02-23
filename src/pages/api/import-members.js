@@ -58,11 +58,10 @@ export default async function handler(req, res) {
       }
 
       // Generazione credenziali automatiche
-      const qrCode = uuidv4().slice(0, 8).toUpperCase();
+      const qrCode = uuidv4().slice(0, 6).toUpperCase();
       let password = null;
       if (member.tipologia_socio_clean === 'VOLONTARIO') {
-        password = Math.random().toString(36).slice(-7); // 7 caratteri
-      }
+        password = 'pasta';}
 
       // Mappatura colonne Database <-> Colonne CSV
       const { error } = await supabase.from('membres').insert([{
