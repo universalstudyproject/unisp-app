@@ -312,6 +312,34 @@ export default function Dashboard() {
     window.location.href = "/";
   };
 
+  useEffect(() => {
+    let scanner = null;
+    if (scanning && !manualInput) {
+      scanner = new Html5Qrcode("reader");
+      scanner
+        .start(
+          { facingMode: "environment" },
+          { fps: 10, qrbox: { width: 250, height: 250 } },
+          (decodedText) => {
+            handleScanSuccess(decodedText);
+            setScanning(false);
+          },
+          (error) => {
+            // On ignore les erreurs de scan continu pour ne pas polluer la console
+          },
+        )
+        .catch((err) => console.error("Erreur caméra:", err));
+    }
+
+    return () => {
+      if (scanner) {
+        scanner
+          .stop()
+          .catch((err) => console.error("Erreur arrêt scanner:", err));
+      }
+    };
+  }, [scanning, manualInput]);
+
   const startScanner = () => {
     // 1. Recuperiamo la tipologia (assicuriamoci che esista)
     const tipologia = user?.tipologia_socio?.toUpperCase();
