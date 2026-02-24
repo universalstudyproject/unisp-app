@@ -79,6 +79,56 @@ export default function StatsView({
     }));
   }, [membres]);
 
+  const calcolaEtaDaCF = (cf) => {
+    if (!cf || cf.length < 11) return null;
+    let anno = parseInt(cf.substring(6, 8), 10);
+    const meseLettera = cf.charAt(8).toUpperCase();
+    let giorno = parseInt(cf.substring(9, 11), 10);
+
+    // Gestione genere (se donna, giorno + 40)
+    if (giorno > 40) giorno -= 40;
+
+    // Determinazione secolo (00-26 = 2000, 27-99 = 1900)
+    const annoCorrente = new Date().getFullYear() % 100;
+    anno += anno <= annoCorrente ? 2000 : 1900;
+
+    const oggi = new Date();
+    let eta = oggi.getFullYear() - anno;
+    return eta;
+  };
+
+  // --- LOGICA ETÀ GENERAZIONALE (Fasce Originali) ---
+  const dataEta = useMemo(() => {
+    // Le tue fasce originali
+    const fasce = { "17-19": 0, "20-25": 0, "26-30": 0, "30+": 0 };
+    let sommaEta = 0;
+    let contati = 0;
+
+    membres.forEach((m) => {
+      const eta = calcolaEtaDaCF(m.codice_fiscale);
+      if (eta && eta > 0 && eta < 100) {
+        sommaEta += eta;
+        contati++;
+        if (eta <= 19) fasce["17-19"]++;
+        else if (eta <= 25) fasce["20-25"]++;
+        else if (eta <= 30) fasce["26-30"]++;
+        else fasce["30+"]++;
+      }
+    });
+
+    const chartData = [
+      { name: "17-19", value: fasce["17-19"], color: "#3b82f6" },
+      { name: "20-25", value: fasce["20-25"], color: "#8b5cf6" },
+      { name: "26-30", value: fasce["26-30"], color: "#ec4899" },
+      { name: "30+", value: fasce["30+"], color: "#f59e0b" },
+    ].filter((d) => d.value > 0);
+
+    return {
+      chart: chartData,
+      media: contati > 0 ? (sommaEta / contati).toFixed(1) : "0",
+    };
+  }, [membres]);
+
   // --- 4. STUDENTI VS NON STUDENTI (Donut Chart) ---
   const dataStudenti = useMemo(() => {
     const si = membres.filter(
@@ -104,7 +154,7 @@ export default function StatsView({
     return Object.entries(counts)
       .map(([name, freq]) => ({ name, freq }))
       .sort((a, b) => b.freq - a.freq)
-      .slice(0, 6);
+      .slice(0, 15);
   }, [alimentiData]);
 
   // --- 6. LOGICA ASSENZE CRITICHE ---
@@ -349,6 +399,67 @@ export default function StatsView({
               />
             </BarChart>
           </ResponsiveContainer>
+        </div>
+      </div>
+
+      <div className="glass p-8 rounded-[3rem] border border-white/10 bg-slate-900/60 relative overflow-hidden shadow-2xl">
+        <h3 className="text-white text-[10px] font-black uppercase tracking-[0.2em] mb-8 text-center opacity-50 italic">
+          Composizione Generazionale
+        </h3>
+        <div className="h-72 relative">
+          <ResponsiveContainer width="100%" height="100%">
+            <PieChart>
+              <Pie
+                data={dataEta.chart}
+                innerRadius={65}
+                outerRadius={95}
+                paddingAngle={10}
+                cornerRadius={12}
+                dataKey="value"
+              >
+                {dataEta.chart.map((entry, index) => (
+                  <Cell
+                    key={`cell-${index}`}
+                    fill={entry.color}
+                    stroke="none"
+                  />
+                ))}
+              </Pie>
+              <Tooltip
+                contentStyle={{
+                  borderRadius: "20px",
+                  backgroundColor: "#0f172a",
+                  border: "1px solid #ffffff10",
+                  fontSize: "12px",
+                }}
+              />
+            </PieChart>
+          </ResponsiveContainer>
+
+          {/* Testo centrale dinamico con la TUA media calcolata */}
+          <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+            <span className="text-[9px] text-blue-400 font-black tracking-widest uppercase mb-1">
+              Età Media
+            </span>
+            <span className="text-4xl text-white font-black">
+              {dataEta.media}
+            </span>
+          </div>
+        </div>
+
+        {/* Legenda con le TUE fasce */}
+        <div className="flex justify-center flex-wrap gap-4 mt-4">
+          {dataEta.chart.map((item, i) => (
+            <div key={i} className="flex items-center gap-2">
+              <div
+                className="w-2 h-2 rounded-full"
+                style={{ backgroundColor: item.color }}
+              />
+              <span className="text-[10px] text-slate-400 font-bold uppercase">
+                {item.name}
+              </span>
+            </div>
+          ))}
         </div>
       </div>
 

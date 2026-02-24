@@ -384,6 +384,36 @@ export default function Dashboard() {
     }
   };
 
+  const reSendSingleEmail = async (m) => {
+    // Feedback visivo immediato
+    setFeedback({ type: "loading", message: `Invio in corso a ${m.nome}...` });
+
+    try {
+      const res = await fetch("/api/send-single-qr", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ memberId: m.id }),
+      });
+
+      const data = await res.json();
+
+      if (data.success) {
+        setFeedback({
+          type: "success",
+          message: `Email inviata con successo!`,
+        });
+        await createLog(
+          "EMAIL_SINGLE_SENT",
+          `Inviato manualmente QR a ${m.nome} ${m.cognome}`,
+        );
+      } else {
+        throw new Error(data.message || "Errore durante l'invio");
+      }
+    } catch (err) {
+      setFeedback({ type: "error", message: `Errore: ${err.message}` });
+    }
+  };
+
   const handleLogout = async () => {
     await createLog("LOGOUT", "Uscita dal sistema");
     localStorage.removeItem("unisp_user");
@@ -811,7 +841,19 @@ export default function Dashboard() {
                   </div>
                 );
               })}
+
+              {/* PULSANTE POSIZIONATO QUI: In fondo alla lista, dentro lo scroll */}
+              {/* <div className="mt-4 pb-4 flex justify-center">
+                <button
+                  onClick={() => reSendSingleEmail(selectedMembre)}
+                  className="flex items-center gap-2 px-6 py-3 rounded-full bg-blue-500/10 hover:bg-blue-500/20 border border-blue-500/20 text-[9px] text-blue-400 uppercase font-black tracking-widest transition-all active:scale-95 shadow-lg"
+                >
+                  <span className="text-xs">✉️</span>
+                  Invia QR Code via Email
+                </button>
+              </div>*/}
             </div>
+
             <div className="p-6 border-t border-white/5">
               <button
                 onClick={() => setSelectedMembre(null)}
