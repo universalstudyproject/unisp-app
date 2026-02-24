@@ -94,36 +94,72 @@ export default function Dashboard() {
   const triggerAutoEmail = async (newMembersCount) => {
     if (newMembersCount <= 0) return;
 
-    // Logghiamo l'inizio
+    // 1. Log iniziale: Segnaliamo che partiamo con l'invio massivo
     await createLog(
       "EMAIL_AUTO_TRIGGER",
-      `Avviato invio automatico per ${newMembersCount} nuovi membri.`,
+      `Inizio invio a lotti per ${newMembersCount} nuovi membri.`,
     );
 
-    // Lanciamo il fetch e NON aspettiamo la risposta con 'await' se vogliamo che vada in background,
-    // ma usiamo un segnale per gestire la persistenza.
-    fetch("/api/send-bulk-qr", {
-      method: "POST",
-      keepalive: true, // <--- Fondamentale: permette alla richiesta di sopravvivere al reload della pagina
-    })
-      .then(async (res) => {
+    let isFinished = false;
+    let totalSent = 0;
+
+    // 2. Ciclo di invio a lotti (Batching)
+    // Continua a chiamare l'API finché il server non risponde "finished: true"
+    while (!isFinished) {
+      try {
+        console.log(
+          `[LOG] Richiesta batch in corso... Inviati finora: ${totalSent}`,
+        );
+
+        const res = await fetch("/api/send-bulk-qr", {
+          method: "POST",
+          // Nota: keepalive è utile, ma qui usiamo await perché il processo è lungo
+          // e vogliamo monitorare ogni passo.
+          keepalive: true,
+        });
+
         const data = await res.json();
+
         if (data.success) {
-          await createLog(
-            "EMAIL_AUTO_SENT",
-            `Inviati con successo ${data.count} QR Code.`,
-          );
+          totalSent += data.count;
+
+          if (data.finished) {
+            // Caso: Tutte le email sono state inviate
+            isFinished = true;
+            console.log(
+              `[LOG] 🎉 Invio completato con successo. Totale: ${totalSent}`,
+            );
+            await createLog(
+              "EMAIL_AUTO_SENT",
+              `Completato! Inviati correttamente ${totalSent} QR Code.`,
+            );
+          } else {
+            // Caso: Ci sono ancora email, facciamo una piccola pausa per Gmail
+            console.log(`[LOG] Batch di ${data.count} inviato. Pausa di 1s...`);
+            await new Promise((resolve) => setTimeout(resolve, 1000));
+          }
         } else {
+          // Caso: L'API ha restituito un errore
+          isFinished = true;
+          console.error("[LOG] ❌ Errore durante il batch:", data.error);
           await createLog(
             "EMAIL_AUTO_ERROR",
-            `Errore API: ${data.message || "Errore sconosciuto"}`,
+            `Errore durante l'invio batch: ${data.error}`,
           );
         }
-      })
-      .catch(async (err) => {
-        console.error("Errore automazione:", err);
-        await createLog("EMAIL_AUTO_CRASH", `Crash invio: ${err.message}`);
-      });
+      } catch (err) {
+        // Caso: Errore di connessione o crash
+        isFinished = true;
+        console.error("[LOG] ❌ Crash connessione API:", err);
+        await createLog(
+          "EMAIL_AUTO_CRASH",
+          `Connessione interrotta: ${err.message}`,
+        );
+      }
+    }
+
+    // 3. Aggiornamento finale della lista membri nella UI
+    fetchMembres();
   };
 
   // --- DOWNLOAD LOG TXT ---
