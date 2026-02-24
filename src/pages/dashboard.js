@@ -247,6 +247,16 @@ export default function Dashboard() {
     fetchMembres();
   };
 
+  useEffect(() => {
+    if (activeTab !== "passages") {
+      window.history.pushState(
+        { tab: activeTab },
+        null,
+        window.location.pathname,
+      );
+    }
+  }, [activeTab]);
+
   const revokeVolontaire = async (id) => {
     const target = membres.find((m) => m.id === id);
     await supabase
@@ -467,6 +477,46 @@ export default function Dashboard() {
     }
   }, []);
 
+  useEffect(() => {
+    const handleBackButton = (e) => {
+      // Se c'è un modale aperto, lo chiudiamo e impediamo l'uscita dall'app
+      if (
+        selectedMembre ||
+        showLogModal ||
+        showExitModal ||
+        scanning ||
+        feedback
+      ) {
+        e.preventDefault();
+        setSelectedMembre(null);
+        setShowLogModal(false);
+        setShowExitModal(false);
+        setScanning(false);
+        setFeedback(null);
+
+        // Reinseriamo uno stato fittizio per "riprendere" il controllo del tasto indietro
+        window.history.pushState(null, null, window.location.pathname);
+      }
+    };
+
+    // Quando apriamo un modale, spingiamo uno stato nella cronologia
+    if (
+      selectedMembre ||
+      showLogModal ||
+      showExitModal ||
+      scanning ||
+      feedback
+    ) {
+      window.history.pushState(null, null, window.location.pathname);
+    }
+
+    window.addEventListener("popstate", handleBackButton);
+
+    return () => {
+      window.removeEventListener("popstate", handleBackButton);
+    };
+  }, [selectedMembre, showLogModal, showExitModal, scanning, feedback]);
+
   if (!mounted) return null;
   const isStaff =
     user?.tipologia_socio?.toUpperCase() === "STAFF" ||
@@ -666,8 +716,13 @@ export default function Dashboard() {
         <div className="fixed inset-0 bg-slate-950/90 backdrop-blur-md z-[400] flex items-center justify-center p-4">
           <div className="glass w-full max-w-md rounded-[2.5rem] border border-white/10 flex flex-col overflow-hidden max-h-[85vh]">
             <div className="p-6 bg-[#1e293b] border-b border-white/10 flex justify-between items-center">
-              <h2 className="text-xl text-white uppercase font-black">
-                {selectedMembre.nome} {selectedMembre.cognome}
+              <h2 className="text-xl uppercase flex gap-2 flex-wrap justify-center">
+                <span className="text-blue-500 font-light">
+                  {selectedMembre.nome}
+                </span>
+                <span className="text-white font-black">
+                  {selectedMembre.cognome}
+                </span>
               </h2>
               <button
                 onClick={() => setSelectedMembre(null)}
@@ -685,7 +740,6 @@ export default function Dashboard() {
                     "created_at",
                     "nome",
                     "cognome",
-                    "codice_qr",
                     "auth_scan_active",
                     "auth_scan_expires_at",
                     "mail_sent",
