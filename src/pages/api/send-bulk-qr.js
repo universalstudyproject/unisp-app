@@ -1,4 +1,4 @@
-import nodemailer from "nodemailer";
+/* import nodemailer from "nodemailer";
 import { supabase } from "@/lib/supabase";
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -68,3 +68,4 @@ export default async function handler(req, res) {
     res.status(500).json({ error: error.message });
   }
 }
+ */

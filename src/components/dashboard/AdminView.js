@@ -51,13 +51,9 @@ export default function AdminView({
               `Importazione completata: ${data.imported} nuovi membri. Nome file: ${file.name}`
             );
 
-            if (data.imported > 0) {
-              triggerAutoEmail(data.imported);
-            }
-
             showNotify(
               "Importazione Riuscita",
-              `Inseriti ${data.imported} membri. QR Code in fase di invio...`,
+              `Inseriti ${data.imported} membri.`,
               "success"
             );
 
@@ -163,8 +159,8 @@ export default function AdminView({
             const hasAuth = isAuthValid(m);
             const isCompactMode = filter === "VOLONTARIO" || filter === "ACCESSI";
 
-            let bStyle = "bg-blue-500/10 text-blue-400 border-blue-500/20";
-            let dotColor = "bg-blue-500";
+            let bStyle = "bg-red-500/10 text-red-400 border-red-500/20";
+            let dotColor = "bg-red-500";
             if (s === "ATTIVO") {
               bStyle = "bg-emerald-500/10 text-emerald-400 border-emerald-500/20";
               dotColor = "bg-emerald-500";
@@ -172,8 +168,8 @@ export default function AdminView({
               bStyle = "bg-amber-500/10 text-amber-400 border-amber-500/20";
               dotColor = "bg-amber-500";
             } else if (s === "ESCLUSO") {
-              bStyle = "bg-red-500/10 text-red-400 border-red-500/20";
-              dotColor = "bg-red-500";
+              bStyle = "bg-gray-500/10 text-gray-400 border-gray-500/20";
+              dotColor = "bg-gray-500";
             }
 
             return (

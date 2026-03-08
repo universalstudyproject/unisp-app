@@ -21,6 +21,15 @@ export default function Dashboard() {
   const [alimenti, setAlimenti] = useState([]);
   const [storicoPassaggi, setStoricoPassaggi] = useState([]);
   const [showExitModal, setShowExitModal] = useState(false);
+  const [confirmAction, setConfirmAction] = useState(null);
+  const [selectedFile, setSelectedFile] = useState(null);
+
+  const [showMassEmailModal, setShowMassEmailModal] = useState(false);
+  const [emailForm, setEmailForm] = useState({
+    subject: "",
+    message: "",
+    includeTessera: false, // Opzione per allegare automaticamente la tessera PDF se esiste
+  });
 
   // STATI PER I LOG
   const [showLogModal, setShowLogModal] = useState(false);
@@ -162,6 +171,151 @@ export default function Dashboard() {
     fetchMembres();
   };
 
+  const handleStartMassSending = async () => {
+    const membriTarget = membres.filter((m) => m.stato === "ATTIVO");
+    if (membriTarget.length === 0)
+      return alert("Nessun membro attivo selezionato.");
+    if (!emailForm.subject || !emailForm.message)
+      return alert("Oggetto e messaggio sono obbligatori.");
+
+    setShowMassEmailModal(false);
+    setIsProcessing(true);
+
+    let allegatoUrl = null;
+
+    // 1. CARICAMENTO FILE GENERICO
+    if (selectedFile) {
+      setFeedback({
+        type: "loading",
+        message: "Caricamento file...",
+        name: "UPLOAD IN CORSO",
+      });
+      // Salviamo nella cartella 'comunicazioni' per ordine
+      const fileName = `comunicazioni/${Date.now()}_${selectedFile.name}`;
+      const { data, error } = await supabase.storage
+        .from("tessere")
+        .upload(fileName, selectedFile);
+
+      if (!error) {
+        const {
+          data: { publicUrl },
+        } = supabase.storage.from("tessere").getPublicUrl(fileName);
+        allegatoUrl = publicUrl;
+      } else {
+        console.error("Errore Upload:", error);
+      }
+    }
+
+    let counter = 0;
+    for (const m of membriTarget) {
+      setFeedback({
+        type: "loading",
+        message: `Inviando comunicazione: ${counter + 1} di ${membriTarget.length}`,
+        name: `${m.nome} ${m.cognome}`,
+        bgColor: "bg-blue-600",
+      });
+
+      try {
+        await fetch("/api/send-custom-email", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            email: m.email,
+            nomeMembro: m.nome, // Passiamo il nome per il saluto dinamico
+            subject: emailForm.subject,
+            message: emailForm.message.replace(/{nome}/g, m.nome),
+            allegatoUrl: allegatoUrl, // Niente più riferimenti alla tessera
+          }),
+        });
+        counter++;
+        if (counter < membriTarget.length)
+          await new Promise((r) => setTimeout(r, 5000));
+      } catch (err) {
+        console.error("Errore durante l'invio:", err);
+      }
+    }
+
+    setIsProcessing(false);
+    setFeedback({
+      type: "success",
+      message: `Comunicazione inviata a ${counter} membri!`,
+      icon: "📧",
+      bgColor: "bg-emerald-600",
+    });
+    setSelectedFile(null);
+  };
+
+  const generateAllCards = async () => {
+    // Filtriamo solo i membri ATTIVI che non hanno ancora la tessera (opzionale)
+    const membriDaProcessare = membres.filter(
+      (m) => m.stato === "ATTIVO" && (!m.tessera_url || m.tessera_url === ""),
+    );
+
+    if (membriDaProcessare.length === 0) {
+      // Feedback specifico se tutti hanno già la tessera
+      setFeedback({
+        type: "info",
+        name: "TUTTO AGGIORNATO",
+        message: "Tutti i membri attivi possiedono già una tessera socio.",
+        icon: "✨",
+        bgColor: "bg-blue-600",
+      });
+      return;
+    }
+
+    setIsProcessing(true);
+    let processati = 0;
+
+    for (const membro of membriDaProcessare) {
+      try {
+        // Aggiorniamo il feedback visivo per l'utente
+        setFeedback({
+          type: "loading",
+          message: `Generazione in corso: ${processati + 1} di ${membriDaProcessare.length}...`,
+        });
+
+        console.log(
+          `[BATCH] Generazione per: ${membro.nome} ${membro.cognome}`,
+        );
+
+        // Chiamiamo l'API del singolo membro (quella che abbiamo perfezionato prima)
+        const res = await fetch("/api/generate-single-card", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ memberId: membro.id }),
+        });
+
+        const data = await res.json();
+
+        if (!data.success) {
+          console.error(`Errore per ${membro.nome}:`, data.message);
+          // Decidi se fermarti o continuare. Qui continuiamo.
+        } else {
+          processati++;
+        }
+
+        // Attesa di 5 secondi per non sovraccaricare Gmail e il DB
+        if (processati < membriDaProcessare.length) {
+          console.log("Attesa 5 secondi prima del prossimo invio...");
+          await new Promise((resolve) => setTimeout(resolve, 5000));
+        }
+      } catch (err) {
+        console.error("Errore critico nel loop:", err);
+      }
+    }
+
+    setIsProcessing(false);
+    setFeedback({
+      type: "success",
+      name: "PROCESSO COMPLETATO",
+      message: `Inviate ${processati} tessere su ${membriDaProcessare.length}`,
+      icon: "🎉",
+      bgColor: "bg-emerald-600",
+    });
+
+    fetchMembres(); // Rinfresca la lista per vedere i nuovi URL
+  };
+
   // --- DOWNLOAD LOG TXT ---
   const downloadMonthlyLogs = async () => {
     if (selectedMonths.length === 0) return alert("Seleziona almeno un mese");
@@ -270,6 +424,36 @@ export default function Dashboard() {
       `${target?.nome} ${target?.cognome}`,
     );
     fetchMembres();
+  };
+
+  const handleSingleCardGeneration = async (member) => {
+    setFeedback({ type: "loading", message: "Generazione in corso..." });
+
+    try {
+      // 1. Chiamata a un'API specifica per il singolo (o usiamo la stessa passando l'ID)
+      const res = await fetch("/api/generate-single-card", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ memberId: member.id }),
+      });
+
+      const data = await res.json();
+
+      if (data.success) {
+        setFeedback({
+          type: "success",
+          name: "OPERAZIONE RIUSCITA",
+          message: "Tessera generata e inviata correttamente!",
+          icon: "✅",
+          bgColor: "bg-emerald-600",
+        });
+        fetchMembres(); // Rinfresca i dati per vedere il link in "TESSERA URL"
+      } else {
+        throw new Error(data.message);
+      }
+    } catch (err) {
+      setFeedback({ type: "error", message: "Errore: " + err.message });
+    }
   };
 
   const updateMembreField = async (membreId, field, newValue) => {
@@ -615,7 +799,7 @@ export default function Dashboard() {
                       <div className="w-4 h-4 border-2 border-emerald-500/30 border-t-emerald-500 rounded-full animate-spin mx-2"></div>
                     ) : (
                       <span className="text-[10px] font-black uppercase tracking-widest text-slate-500 hover:text-emerald-500 px-2 transition-colors">
-                        Log
+                        ADMIN
                       </span>
                     )}
                   </button>
@@ -672,7 +856,7 @@ export default function Dashboard() {
         </button>
       )}
 
-      {/* MODALE SCELTA MESI LOG */}
+      {/* MODALE PANNELLO ADMIN */}
       {showLogModal && (
         <div className="fixed inset-0 z-[1000] flex items-center justify-center p-6 animate-in fade-in duration-300">
           <div
@@ -680,33 +864,141 @@ export default function Dashboard() {
             onClick={() => setShowLogModal(false)}
           ></div>
           <div className="relative glass bg-[#1e293b] border border-white/10 w-full max-w-sm rounded-[3rem] p-8 shadow-2xl">
-            <h2 className="text-white font-light text-xs  mb-4 text-center tracking-tighter">
-              Seleziona i mesi per cui vuoi scaricare i log
+            <h2 className="text-white font-black text-center uppercase tracking-[0.2em] mb-8 text-sm">
+              Pannello Admin
             </h2>
-            <div className="grid grid-cols-3 gap-2 mb-6">
-              {monthsList.map((month, idx) => (
-                <button
-                  key={idx}
-                  onClick={() => toggleMonth(idx)}
-                  className={`py-2 rounded-xl text-[10px] font-bold border transition-all ${selectedMonths.includes(idx) ? "bg-emerald-600 border-emerald-500 text-white" : "bg-white/5 border-white/10 text-slate-400"}`}
+
+            {/* SEZIONE AZIONI RAPIDE */}
+            <div className="flex flex-col gap-3 mb-10">
+              <button
+                onClick={() => {
+                  setShowLogModal(false);
+                  setShowMassEmailModal(true);
+                }}
+                className="w-full bg-blue-600/10 border border-blue-500/30 py-4 rounded-2xl font-black text-blue-400 uppercase text-[10px] tracking-widest active:scale-95 transition-all flex items-center justify-center gap-3"
+              >
+                <svg
+                  className="w-4 h-4"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
                 >
-                  {month.substring(0, 3)}
-                </button>
-              ))}
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth="2.5"
+                    d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"
+                  />
+                </svg>
+                Invia Email Massive
+              </button>
+
+              <button
+                onClick={() =>
+                  setConfirmAction({
+                    title: "Genera PDF",
+                    message: `Verrà generato un documento PDF con le tessere fedeltà di tutti i membri attivi.`,
+                    icon: "🪪",
+                    color: "purple",
+                    onConfirm: () => {
+                      // Qui chiameremo la funzione PDF che creeremo
+                      generateAllCards();
+                      setConfirmAction(null);
+                    },
+                  })
+                }
+                className="w-full bg-purple-600/10 border border-purple-500/30 py-4 rounded-2xl font-black text-purple-400 uppercase text-[10px] tracking-widest active:scale-95 transition-all flex items-center justify-center gap-3"
+              >
+                <svg
+                  className="w-4 h-4"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth="2.5"
+                    d="M10 6H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V8a2 2 0 00-2-2h-5m-4 0V5a2 2 0 114 0v1m-4 0a2 2 0 104 0m-5 8a2 2 0 100-4 2 2 0 000 4zm0 0c1.306 0 2.417.835 2.83 2M9 14a3.001 3.001 0 00-2.83 2M15 11h3m-3 4h2"
+                  />
+                </svg>
+                Genera Carte Fedeltà
+              </button>
             </div>
-            <div className="flex flex-col gap-3">
-              <button
-                onClick={downloadMonthlyLogs}
-                className="w-full bg-emerald-600 py-4 rounded-2xl font-black text-white uppercase tracking-widest active:scale-95 transition-all"
-              >
-                scarica files
-              </button>
-              <button
-                onClick={() => setShowLogModal(false)}
-                className="w-full bg-white/5 py-4 rounded-2xl font-black text-slate-300 uppercase border border-white/10"
-              >
-                Annulla
-              </button>
+
+            {/* SEZIONE LOG REGISTRI */}
+            <div className="border-t border-white/5 pt-6">
+              <p className="text-slate-500 font-bold text-[9px] uppercase text-center mb-4 tracking-widest">
+                Esporta logs
+              </p>
+
+              <div className="grid grid-cols-3 gap-2 mb-6">
+                {monthsList.map((month, idx) => (
+                  <button
+                    key={idx}
+                    onClick={() => toggleMonth(idx)}
+                    className={`py-2 rounded-xl text-[9px] font-bold border transition-all ${
+                      selectedMonths.includes(idx)
+                        ? "bg-emerald-600/20 border-emerald-500 text-emerald-400"
+                        : "bg-white/5 border-white/10 text-slate-500"
+                    }`}
+                  >
+                    {month.substring(0, 3)}
+                  </button>
+                ))}
+              </div>
+
+              <div className="flex flex-col gap-3">
+                <button
+                  onClick={() => {
+                    if (selectedMonths.length === 0) {
+                      setConfirmAction({
+                        title: "Mese Mancante",
+                        message:
+                          "Seleziona almeno un mese dalla griglia qui sotto per scaricare i log.",
+                        icon: "⚠️",
+                        color: "amber",
+                        onConfirm: () => setConfirmAction(null),
+                      });
+                      return;
+                    }
+                    setConfirmAction({
+                      title: "Download Log",
+                      message: `Stai per scaricare i registri attività per i mesi selezionati.`,
+                      icon: "📂",
+                      color: "emerald",
+                      onConfirm: () => {
+                        downloadMonthlyLogs();
+                        setConfirmAction(null);
+                      },
+                    });
+                  }}
+                  className="w-full bg-emerald-600 py-4 rounded-2xl font-black text-white uppercase text-[10px] tracking-widest active:scale-95 transition-all flex items-center justify-center gap-3 shadow-lg shadow-emerald-900/20"
+                >
+                  <svg
+                    className="w-4 h-4"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth="2.5"
+                      d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+                    />
+                  </svg>
+                  Scarica file log
+                </button>
+
+                {/* Bottone Chiudi (senza icona per pulizia visiva) */}
+                <button
+                  onClick={() => setShowLogModal(false)}
+                  className="w-full bg-white/5 py-4 rounded-2xl font-black text-slate-400 uppercase text-[10px] border border-white/10 active:scale-95 transition-all"
+                >
+                  Chiudi
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -852,6 +1144,42 @@ export default function Dashboard() {
                   Invia QR Code via Email
                 </button>
               </div>*/}
+
+              {/* SEZIONE AZIONI TESSERA SINGOLA */}
+              <div className="mt-6">
+                {selectedMembre.stato === "ATTIVO" && (
+                  <button
+                    onClick={() =>
+                      setConfirmAction({
+                        title: "Genera e Invia",
+                        message: `Vuoi generare la tessera per ${selectedMembre.nome} e inviarla subito via email?`,
+                        icon: "🪪",
+                        color: "purple",
+                        onConfirm: () => {
+                          handleSingleCardGeneration(selectedMembre);
+                          setConfirmAction(null);
+                        },
+                      })
+                    }
+                    className="w-full bg-purple-600/10 border border-purple-500/30 py-4 rounded-2xl font-black text-purple-400 uppercase text-[10px] tracking-widest active:scale-95 transition-all flex items-center justify-center gap-3"
+                  >
+                    <svg
+                      className="w-4 h-4"
+                      fill="none"
+                      stroke="currentColor"
+                      viewBox="0 0 24 24"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth="2.5"
+                        d="M10 6H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V8a2 2 0 00-2-2h-5m-4 0V5a2 2 0 114 0v1m-4 0a2 2 0 104 0m-5 8a2 2 0 100-4 2 2 0 000 4zm0 0c1.306 0 2.417.835 2.83 2M9 14a3.001 3.001 0 00-2.83 2M15 11h3m-3 4h2"
+                      />
+                    </svg>
+                    Genera e Invia Tessera
+                  </button>
+                )}
+              </div>
             </div>
 
             <div className="p-6 border-t border-white/5">
@@ -866,29 +1194,176 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* FEEDBACK SCANNER */}
+      {/* FEEDBACK SCANNER / GENERAZIONE / INVIO */}
       {feedback && (
-        <div className="fixed inset-0 z-[500] flex items-center justify-center p-6 animate-in fade-in duration-500">
+        <div className="fixed inset-0 z-[3000] flex items-center justify-center p-6 animate-in fade-in duration-500">
           <div
             className="absolute inset-0 bg-slate-950/80 backdrop-blur-2xl"
-            onClick={() => setFeedback(null)}
+            // Permettiamo di chiudere cliccando fuori SOLO se non sta caricando
+            onClick={() => feedback.type !== "loading" && setFeedback(null)}
           ></div>
+
           <div
-            className={`relative ${feedback.bgColor} w-full max-w-sm rounded-[3.5rem] p-10 shadow-2xl border border-white/30 text-center`}
+            className={`relative ${feedback.bgColor || "bg-slate-900"} w-full max-w-sm rounded-[3.5rem] p-10 shadow-2xl border border-white/30 text-center transition-all`}
           >
-            <div className="text-7xl mb-6">{feedback.icon}</div>
-            <h3 className="text-white text-xs font-black uppercase mb-4">
+            {/* ICONA O SPINNER */}
+            <div className="text-7xl mb-6 flex justify-center">
+              {feedback.type === "loading" ? (
+                <div className="w-16 h-16 border-4 border-white/20 border-t-white rounded-full animate-spin"></div>
+              ) : (
+                feedback.icon
+              )}
+            </div>
+
+            {/* NOME DEL MEMBRO O TITOLO OPERAZIONE */}
+            <h3 className="text-white text-xs font-black uppercase mb-4 opacity-70">
               {feedback.name}
             </h3>
-            <p className="text-white text-4xl font-black uppercase tracking-tighter mb-2">
+
+            {/* MESSAGGIO DI STATO */}
+            <p className="text-white text-2xl font-black uppercase tracking-tighter mb-2 leading-none">
               {feedback.message}
             </p>
-            <button
-              onClick={() => setFeedback(null)}
-              className="mt-12 bg-white text-slate-900 px-10 py-4 rounded-full text-[11px] font-black uppercase"
-            >
-              Continua
-            </button>
+
+            {/* TASTO CONTINUA: Appare solo se l'operazione è FINITA (success o error) */}
+            {feedback.type !== "loading" ? (
+              <button
+                onClick={() => setFeedback(null)}
+                className="mt-12 bg-white text-slate-900 px-10 py-4 rounded-full text-[11px] font-black uppercase shadow-xl active:scale-95 transition-transform"
+              >
+                Continua
+              </button>
+            ) : (
+              <p className="mt-8 text-white/50 text-[9px] uppercase font-bold tracking-[0.2em] animate-pulse">
+                Attendere, non chiudere...
+              </p>
+            )}
+          </div>
+        </div>
+      )}
+
+      {showMassEmailModal && (
+        <div className="fixed inset-0 z-[2000] flex items-center justify-center p-4 animate-in fade-in duration-300">
+          <div
+            className="absolute inset-0 bg-slate-950/90 backdrop-blur-xl"
+            onClick={() => setShowMassEmailModal(false)}
+          ></div>
+
+          <div className="relative glass bg-[#1e293b] border border-white/10 w-full max-w-lg rounded-[3rem] p-8 shadow-2xl overflow-hidden">
+            {/* Intestazione */}
+            <div className="text-center mb-8">
+              <h2 className="text-white font-black text-xl uppercase tracking-tighter">
+                Nuova Comunicazione Massiva
+              </h2>
+              <p className="text-slate-500 text-[10px] uppercase font-bold tracking-widest mt-1">
+                Destinatari:{" "}
+                {membres.filter((m) => m.stato === "ATTIVO").length} Membri
+                Attivi
+              </p>
+            </div>
+
+            <div className="space-y-5">
+              {/* Campo Oggetto */}
+              <div>
+                <label className="text-[10px] font-black text-blue-400 uppercase ml-2 mb-2 block">
+                  Oggetto della Email
+                </label>
+                <input
+                  type="text"
+                  placeholder="Es: Avviso importante per i soci..."
+                  className="w-full bg-slate-900/50 border border-white/10 rounded-2xl px-5 py-4 text-white outline-none focus:border-blue-500 transition-all font-bold"
+                  value={emailForm.subject}
+                  onChange={(e) =>
+                    setEmailForm({ ...emailForm, subject: e.target.value })
+                  }
+                />
+              </div>
+
+              {/* Campo Messaggio */}
+              <div>
+                <label className="text-[10px] font-black text-blue-400 uppercase ml-2 mb-2 block">
+                  Messaggio (usa {"{nome}"} per personalizzare)
+                </label>
+                <textarea
+                  rows="5"
+                  placeholder="Ciao {nome}, ti scriviamo per..."
+                  className="w-full bg-slate-900/50 border border-white/10 rounded-2xl px-5 py-4 text-white outline-none focus:border-blue-500 transition-all text-sm leading-relaxed"
+                  value={emailForm.message}
+                  onChange={(e) =>
+                    setEmailForm({ ...emailForm, message: e.target.value })
+                  }
+                ></textarea>
+              </div>
+
+              {/* AREA UPLOAD FILE (Sostituisce il vecchio interruttore) */}
+              <div className="space-y-2">
+                <label className="text-[10px] font-black text-blue-400 uppercase ml-2 block">
+                  Allega un file dal telefono
+                </label>
+                <div className="relative">
+                  <input
+                    type="file"
+                    id="fileUpload"
+                    className="hidden"
+                    onChange={(e) => setSelectedFile(e.target.files[0])}
+                  />
+                  <label
+                    htmlFor="fileUpload"
+                    className={`w-full flex items-center gap-4 p-5 rounded-2xl border-2 border-dashed transition-all cursor-pointer ${
+                      selectedFile
+                        ? "border-emerald-500 bg-emerald-500/10"
+                        : "border-white/10 bg-white/5 hover:border-blue-500/50"
+                    }`}
+                  >
+                    <span className="text-2xl">
+                      {selectedFile ? "📄" : "📁"}
+                    </span>
+                    <div className="flex flex-col text-left overflow-hidden">
+                      <span
+                        className={`text-[10px] font-black uppercase truncate ${selectedFile ? "text-emerald-400" : "text-slate-400"}`}
+                      >
+                        {selectedFile
+                          ? selectedFile.name
+                          : "Scegli file o scatta foto"}
+                      </span>
+                      <span className="text-[8px] text-slate-500 uppercase tracking-widest">
+                        {selectedFile
+                          ? `${(selectedFile.size / 1024 / 1024).toFixed(2)} MB`
+                          : "PDF, JPG, PNG"}
+                      </span>
+                    </div>
+                  </label>
+
+                  {selectedFile && (
+                    <button
+                      onClick={(e) => {
+                        e.preventDefault();
+                        setSelectedFile(null);
+                      }}
+                      className="absolute right-4 top-1/2 -translate-y-1/2 w-8 h-8 bg-red-500/20 text-red-500 rounded-full flex items-center justify-center font-bold"
+                    >
+                      &times;
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Pulsanti Azione */}
+              <div className="grid grid-cols-2 gap-3 pt-4">
+                <button
+                  onClick={() => setShowMassEmailModal(false)}
+                  className="bg-white/5 py-4 rounded-2xl font-black text-slate-500 uppercase text-[10px] tracking-widest border border-white/5"
+                >
+                  Annulla
+                </button>
+                <button
+                  onClick={handleStartMassSending}
+                  className="bg-blue-600 py-4 rounded-2xl font-black text-white uppercase text-[10px] tracking-widest shadow-lg shadow-blue-900/40 active:scale-95 transition-all"
+                >
+                  Invia a Tutti
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}
@@ -966,6 +1441,48 @@ export default function Dashboard() {
             >
               Ho capito
             </button>
+          </div>
+        </div>
+      )}
+      {/* MODALE DI CONFERMA DESIGNER */}
+      {confirmAction && (
+        <div className="fixed inset-0 z-[2000] flex items-center justify-center p-6 animate-in fade-in zoom-in duration-300">
+          <div
+            className="absolute inset-0 bg-slate-950/80 backdrop-blur-md"
+            onClick={() => setConfirmAction(null)}
+          ></div>
+
+          <div className="relative glass bg-[#1e293b] border border-white/10 w-full max-w-xs rounded-[3rem] p-8 text-center shadow-2xl overflow-hidden">
+            {/* Glow d'accento dietro l'icona */}
+            <div
+              className={`absolute -top-10 left-1/2 -translate-x-1/2 w-32 h-32 blur-3xl opacity-20 bg-${confirmAction.color}-500`}
+            ></div>
+
+            <div className="text-5xl mb-4 relative">{confirmAction.icon}</div>
+
+            <h3 className="text-white font-black text-xl uppercase tracking-tighter mb-2">
+              {confirmAction.title}
+            </h3>
+
+            <p className="text-slate-400 text-xs leading-relaxed mb-8">
+              {confirmAction.message}
+            </p>
+
+            <div className="flex flex-col gap-3">
+              <button
+                onClick={confirmAction.onConfirm}
+                className={`w-full bg-${confirmAction.color}-600 py-4 rounded-2xl font-black text-white uppercase text-[10px] tracking-[0.2em] shadow-lg shadow-${confirmAction.color}-900/40 active:scale-95 transition-all`}
+              >
+                Conferma Operazione
+              </button>
+
+              <button
+                onClick={() => setConfirmAction(null)}
+                className="w-full bg-white/5 py-4 rounded-2xl font-black text-slate-500 uppercase text-[10px] tracking-widest border border-white/5 active:scale-95 transition-all"
+              >
+                Annulla
+              </button>
+            </div>
           </div>
         </div>
       )}

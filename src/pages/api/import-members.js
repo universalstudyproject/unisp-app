@@ -1,10 +1,41 @@
 import { createClient } from "@supabase/supabase-js";
-import { v4 as uuidv4 } from "uuid";
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL,
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
 );
+
+const crypto = require("crypto");
+function generateDeterministicQR(cf) {
+  // 1. Créer le hash SHA-256 complet
+  const fullHash = crypto.createHash("sha256").update(cf).digest("hex");
+
+  // 2. Trouver la première séquence de 10 caractères qui ne commence pas par '0'
+  // On parcourt le hash par paliers pour trouver une section "propre"
+  let startIndex = 0;
+  while (fullHash[startIndex] === "0" && startIndex < fullHash.length - 10) {
+    startIndex++;
+  }
+
+  // 3. Extraire les 10 caractères à partir de cet index
+  const subHash = fullHash.substring(startIndex, startIndex + 10);
+  const decimalValue = parseInt(subHash, 16);
+
+  // 4. Convertir en Base36 (0-9, A-Z)
+  let code = decimalValue.toString(36).toUpperCase();
+
+  // 5. Ajustement de la longueur à 6 caractères
+  // Si le code résultant commence encore par 0 (rare après le décalage),
+  // on utilise un décalage de sécurité alphabétique
+  if (code.startsWith("0")) {
+    const alphabet = "ABCDEFGHIJKLMNPQRSTUVWXYZ"; // On exclut O pour éviter confusion avec 0
+    let replacement = alphabet[cf.length % alphabet.length];
+    code = replacement + code.substring(1);
+  }
+
+  // On s'assure d'avoir exactement 6 caractères
+  return code.padEnd(6, "X").substring(0, 6);
+}
 
 export default async function handler(req, res) {
   if (req.method !== "POST")
@@ -75,7 +106,8 @@ export default async function handler(req, res) {
       }
 
       // Generazione credenziali automatiche
-      const qrCode = uuidv4().slice(0, 6).toUpperCase();
+      const qrCode = generateDeterministicQR(cfClean);
+
       let password = null;
       if (member.tipologia_socio_clean === "VOLONTARIO") {
         password = "pasta";
@@ -100,7 +132,7 @@ export default async function handler(req, res) {
           documento_id_url: member.doc,
           isee_url: member.isee,
           consenso_privacy: member.privacy,
-          stato: "Attivo",
+          stato: "SOSPESO",
           codice_qr: qrCode,
           password: password,
         },
