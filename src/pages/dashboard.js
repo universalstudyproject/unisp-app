@@ -9,13 +9,19 @@ import Image from "next/image";
 // Import dei sotto-componenti
 import AdminView from "@/components/dashboard/AdminView";
 import PassaggiView from "@/components/dashboard/PassaggiView";
+import DistribuzioneView from "@/components/dashboard/DistribuzioneView";
 
 export default function Dashboard() {
   const router = useRouter();
   const [mounted, setMounted] = useState(false);
-  const [passaggi, setPassaggi] = useState([]);
+  const [prenotazioni, setPrenotazioni] = useState([]);
   const [membres, setMembres] = useState([]);
-  const [activeTab, setActiveTab] = useState("passages");
+  const [activeTab, setActiveTab] = useState(() => {
+    if (typeof window !== "undefined") {
+      return localStorage.getItem("unisp_active_tab") || "dashboard";
+    }
+    return "dashboard";
+  });
   const [user, setUser] = useState(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [alimenti, setAlimenti] = useState([]);
@@ -28,7 +34,11 @@ export default function Dashboard() {
   const [emailForm, setEmailForm] = useState({
     subject: "",
     message: "",
-    includeTessera: false, // Opzione per allegare automaticamente la tessera PDF se esiste
+  });
+
+  const [filters, setFilters] = useState({
+    stati: [],
+    ruoli: [],
   });
 
   // STATI PER I LOG
@@ -98,8 +108,6 @@ export default function Dashboard() {
     }
   };
 
-  // --- LOGICA AUTOMAZIONE EMAIL (MIGLIORATA) ---
-  // --- LOGICA AUTOMAZIONE EMAIL (CORRETTA) ---
   const triggerAutoEmail = async (newMembersCount) => {
     if (newMembersCount <= 0) return;
 
@@ -172,78 +180,191 @@ export default function Dashboard() {
   };
 
   const handleStartMassSending = async () => {
-    const membriTarget = membres.filter((m) => m.stato === "ATTIVO");
-    if (membriTarget.length === 0)
-      return alert("Nessun membro attivo selezionato.");
-    if (!emailForm.subject || !emailForm.message)
-      return alert("Oggetto e messaggio sono obbligatori.");
-
-    setShowMassEmailModal(false);
-    setIsProcessing(true);
-
-    let allegatoUrl = null;
-
-    // 1. CARICAMENTO FILE GENERICO
-    if (selectedFile) {
-      setFeedback({
-        type: "loading",
-        message: "Caricamento file...",
-        name: "UPLOAD IN CORSO",
-      });
-      // Salviamo nella cartella 'comunicazioni' per ordine
-      const fileName = `comunicazioni/${Date.now()}_${selectedFile.name}`;
-      const { data, error } = await supabase.storage
-        .from("tessere")
-        .upload(fileName, selectedFile);
-
-      if (!error) {
-        const {
-          data: { publicUrl },
-        } = supabase.storage.from("tessere").getPublicUrl(fileName);
-        allegatoUrl = publicUrl;
-      } else {
-        console.error("Errore Upload:", error);
-      }
-    }
-
-    let counter = 0;
-    for (const m of membriTarget) {
-      setFeedback({
-        type: "loading",
-        message: `Inviando comunicazione: ${counter + 1} di ${membriTarget.length}`,
-        name: `${m.nome} ${m.cognome}`,
-        bgColor: "bg-blue-600",
-      });
-
-      try {
-        await fetch("/api/send-custom-email", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            email: m.email,
-            nomeMembro: m.nome, // Passiamo il nome per il saluto dinamico
-            subject: emailForm.subject,
-            message: emailForm.message.replace(/{nome}/g, m.nome),
-            allegatoUrl: allegatoUrl, // Niente più riferimenti alla tessera
-          }),
-        });
-        counter++;
-        if (counter < membriTarget.length)
-          await new Promise((r) => setTimeout(r, 5000));
-      } catch (err) {
-        console.error("Errore durante l'invio:", err);
-      }
-    }
-
-    setIsProcessing(false);
-    setFeedback({
-      type: "success",
-      message: `Comunicazione inviata a ${counter} membri!`,
-      icon: "📧",
-      bgColor: "bg-emerald-600",
+    // 1. FILTRAGGIO COMBINATO
+    const membriTarget = membres.filter((m) => {
+      const matchStato =
+        filters.stati.length === 0 ||
+        filters.stati.includes(m.stato?.toUpperCase());
+      const matchRuolo =
+        filters.ruoli.length === 0 ||
+        filters.ruoli.includes(m.tipologia_socio?.toUpperCase());
+      return matchStato && matchRuolo;
     });
-    setSelectedFile(null);
-  };
+
+    // Validazione Target con Modal
+    if (membriTarget.length === 0) {
+      setModalAlert({
+        title: "NESSUN TARGET",
+        message: "Nessun membro corrisponde ai filtri selezionati.",
+        icon: (
+          <svg
+            className="w-10 h-10 mx-auto mb-4 text-amber-400 drop-shadow-[0_0_20px_rgba(251,191,36,0.7)]"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth="1.5"
+              d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z"
+            />
+          </svg>
+        ),
+      });
+      return;
+    }
+
+    // Validazione Campi con Modal
+    if (!emailForm.subject || !emailForm.message) {
+      setModalAlert({
+        title: "CAMPI MANCANTI",
+        message: "Inserisci oggetto e messaggio prima di inviare.",
+        icon: (
+          <svg
+            className="w-10 h-10 mx-auto mb-4 text-amber-400 drop-shadow-[0_0_20px_rgba(251,191,36,0.7)]"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth="1.5"
+              d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L6.832 19.82a4.5 4.5 0 01-1.897 1.13l-2.685.8.8-2.685a4.5 4.5 0 011.13-1.897L16.863 4.487zm0 0L19.5 7.125"
+            />
+          </svg>
+        ),
+      });
+      return;
+    }
+
+    // Conferma Invio con Modal Designer
+    setConfirmAction({
+      title: "AVVIA INVIO MASSIVO",
+      message: `Stai per inviare questa e-mail a ${membriTarget.length} persone. Procedere?`,
+      icon: (
+        <svg
+          className="w-10 h-10 mx-auto mb-4 text-blue-400 drop-shadow-[0_0_20px_rgba(96,165,250,0.7)]"
+          fill="none"
+          stroke="currentColor"
+          viewBox="0 0 24 24"
+        >
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth="1.5"
+            d="M21.75 6.75v10.5a2.25 2.25 0 01-2.25 2.25h-15a2.25 2.25 0 01-2.25-2.25V6.75m19.5 0A2.25 2.25 0 0019.5 4.5h-15a2.25 2.25 0 00-2.25 2.25m19.5 0v.243a2.25 2.25 0 01-1.07 1.916l-7.5 4.615a2.25 2.25 0 01-2.36 0L3.32 8.91a2.25 2.25 0 01-1.07-1.916V6.75"
+          />
+        </svg>
+      ),
+      color: "blue",
+      onConfirm: async () => {
+        setConfirmAction(null);
+        setShowMassEmailModal(false);
+        setIsProcessing(true);
+
+        let allegatoUrl = null;
+
+        try {
+          // 2. CARICAMENTO FILE
+          if (selectedFile) {
+            setFeedback({
+              type: "loading",
+              message: "Caricamento file...",
+              name: "UPLOAD",
+            });
+            const fileName = `comunicazioni/${Date.now()}_${selectedFile.name}`;
+            const { error: uploadError } = await supabase.storage
+              .from("tessere")
+              .upload(fileName, selectedFile);
+
+            if (!uploadError) {
+              const {
+                data: { publicUrl },
+              } = supabase.storage.from("tessere").getPublicUrl(fileName);
+              allegatoUrl = publicUrl;
+            }
+          }
+
+          // 3. INVIO SEQUENZIALE
+          let counter = 0;
+          for (const m of membriTarget) {
+            setFeedback({
+              type: "loading",
+              message: `Invio: ${counter + 1} di ${membriTarget.length}`,
+              name: `${m.nome} ${m.cognome}`,
+              bgColor: "bg-blue-600",
+            });
+
+            await fetch("/api/send-custom-email", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                email: m.email,
+                nomeMembro: m.nome,
+                subject: emailForm.subject,
+                message: emailForm.message.replace(/{nome}/g, m.nome),
+                allegatoUrl: allegatoUrl,
+              }),
+            });
+
+            counter++;
+            if (counter < membriTarget.length) {
+              await new Promise((r) => setTimeout(r, 5000));
+            }
+          }
+
+          setFeedback({
+            type: "success",
+            message: `Inviate ${counter} email con successo!`,
+            icon: (
+              <svg
+                className="w-16 h-16 text-emerald-400 mx-auto"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth="2"
+                  d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"
+                />
+              </svg>
+            ),
+            bgColor: "bg-emerald-600",
+          });
+        } catch (err) {
+          console.error("Errore:", err);
+          setFeedback({
+            type: "error",
+            message: "Errore durante l'invio.",
+            icon: (
+              <svg
+                className="w-16 h-16 text-white mx-auto"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth="2"
+                  d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+                />
+              </svg>
+            ),
+            bgColor: "bg-red-600",
+          });
+        } finally {
+          setIsProcessing(false);
+          setSelectedFile(null);
+          setFilters({ stati: [], ruoli: [] });
+        }
+      },
+    });
+  }; // <--- LA FUNZIONE FINISCE QUI. NON DEVE ESSERCI NULLA TRA QUESTO E 'generateAllCards'
 
   const generateAllCards = async () => {
     // Filtriamo solo i membri ATTIVI che non hanno ancora la tessera (opzionale)
@@ -257,7 +378,21 @@ export default function Dashboard() {
         type: "info",
         name: "TUTTO AGGIORNATO",
         message: "Tutti i membri attivi possiedono già una tessera socio.",
-        icon: "✨",
+        icon: (
+          <svg
+            className="w-16 h-16 text-blue-300 mx-auto"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth="2"
+              d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+            />
+          </svg>
+        ),
         bgColor: "bg-blue-600",
       });
       return;
@@ -309,7 +444,21 @@ export default function Dashboard() {
       type: "success",
       name: "PROCESSO COMPLETATO",
       message: `Inviate ${processati} tessere su ${membriDaProcessare.length}`,
-      icon: "🎉",
+      icon: (
+        <svg
+          className="w-16 h-16 text-emerald-300 mx-auto"
+          fill="none"
+          stroke="currentColor"
+          viewBox="0 0 24 24"
+        >
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth="2"
+            d="M5 13l4 4L19 7"
+          />
+        </svg>
+      ),
       bgColor: "bg-emerald-600",
     });
 
@@ -360,17 +509,12 @@ export default function Dashboard() {
     }
   };
 
-  const fetchPassaggiOggi = async () => {
-    const startOfDay = new Date();
-    startOfDay.setHours(0, 0, 0, 0);
+  const fetchPrenotazioniOggi = async () => {
     const { data } = await supabase
-      .from("passaggi")
-      .select(
-        `id, scanned_at, numero_giornaliero, membres!membre_id ( nome, cognome )`,
-      )
-      .gt("scanned_at", startOfDay.toISOString())
+      .from("prenotazioni")
+      .select(`id, scanned_at, numero_giornaliero, membres ( nome, cognome )`)
       .order("scanned_at", { ascending: false });
-    if (data) setPassaggi(data);
+    if (data) setPrenotazioni(data);
   };
 
   const fetchMembres = async () => {
@@ -401,6 +545,30 @@ export default function Dashboard() {
     fetchMembres();
   };
 
+  // LA LOGIQUE "PULL" : À chaque fois qu'on ouvre l'onglet STATS, on télécharge les données fraîches !
+  useEffect(() => {
+    if (activeTab === "dashboard" && user) {
+      const fetchFreshStats = async () => {
+        // 1. On charge les membres (pour les graphiques d'âge, étudiants, etc.)
+        fetchMembres();
+
+        // 1. On va chercher les derniers aliments
+        const { data: alimentiFreschi } = await supabase
+          .from("alimenti")
+          .select("*");
+        if (alimentiFreschi) setAlimenti(alimentiFreschi);
+
+        // 2. On peut même en profiter pour rafraîchir l'historique des passages !
+        const { data: passaggiFreschi } = await supabase
+          .from("passaggi")
+          .select("nome_cognome, scanned_at");
+        if (passaggiFreschi) setStoricoPassaggi(passaggiFreschi);
+      };
+
+      fetchFreshStats();
+    }
+  }, [activeTab, user]); // S'active à chaque fois que 'activeTab' change
+
   useEffect(() => {
     if (activeTab !== "passages") {
       window.history.pushState(
@@ -409,6 +577,11 @@ export default function Dashboard() {
         window.location.pathname,
       );
     }
+  }, [activeTab]);
+
+  // Sauvegarde l'onglet à chaque changement
+  useEffect(() => {
+    localStorage.setItem("unisp_active_tab", activeTab);
   }, [activeTab]);
 
   const revokeVolontaire = async (id) => {
@@ -444,7 +617,21 @@ export default function Dashboard() {
           type: "success",
           name: "OPERAZIONE RIUSCITA",
           message: "Tessera generata e inviata correttamente!",
-          icon: "✅",
+          icon: (
+            <svg
+              className="w-16 h-16 text-white mx-auto"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth="3"
+                d="M5 13l4 4L19 7"
+              />
+            </svg>
+          ),
           bgColor: "bg-emerald-600",
         });
         fetchMembres(); // Rinfresca i dati per vedere il link in "TESSERA URL"
@@ -492,7 +679,21 @@ export default function Dashboard() {
         name: "SCONOSCIUTO",
         bgColor: "bg-slate-900",
         message: "QR NON VALIDO",
-        icon: "🚫",
+        icon: (
+          <svg
+            className="w-16 h-16 text-red-500 mx-auto"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth="2"
+              d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636"
+            />
+          </svg>
+        ),
       });
 
     const nomComplet = `${membre.nome} ${membre.cognome}`;
@@ -502,7 +703,21 @@ export default function Dashboard() {
         name: nomComplet,
         bgColor: "bg-red-600",
         message: membre.stato.toUpperCase(),
-        icon: "🔒",
+        icon: (
+          <svg
+            className="w-16 h-16 text-white mx-auto"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth="2"
+              d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"
+            />
+          </svg>
+        ),
       });
 
     const startOfDay = new Date();
@@ -510,7 +725,7 @@ export default function Dashboard() {
 
     // 2. Controllo se è già passato oggi
     const { data: check } = await supabase
-      .from("passaggi")
+      .from("prenotazioni")
       .select("numero_giornaliero")
       .eq("membre_id", membre.id)
       .gt("scanned_at", startOfDay.toISOString())
@@ -521,18 +736,33 @@ export default function Dashboard() {
         name: nomComplet,
         bgColor: "bg-blue-500",
         message: `GIÀ PASSATO: N° ${check.numero_giornaliero}`,
-        icon: "ℹ️",
+        icon: (
+          <svg
+            className="w-16 h-16 text-white mx-auto"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth="2"
+              d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+            />
+          </svg>
+        ),
       });
 
     // 3. Registriamo il nuovo passaggio e CHIEDIAMO di restituire il numero generato
-    const { data: newPassaggio, error: insErr } = await supabase
-      .from("passaggi")
+    // ... dopo aver validato il membro
+    const { data: newPrenotazione, error: insErr } = await supabase
+      .from("prenotazioni")
       .insert([{ membre_id: membre.id }])
-      .select("numero_giornaliero") // Cruciale per avere il numero subito
+      .select("numero_giornaliero")
       .single();
 
-    if (!insErr && newPassaggio) {
-      const numero = newPassaggio.numero_giornaliero;
+    if (!insErr && newPrenotazione) {
+      const numero = newPrenotazione.numero_giornaliero;
 
       // 4. Scriviamo il Log
       await createLog(
@@ -554,14 +784,28 @@ export default function Dashboard() {
       }).catch((e) => console.error("Errore invio email conferma:", e));
 
       // 6. Refresh lista locale
-      fetchPassaggiOggi();
+      fetchPrenotazioniOggi();
 
       // 7. Feedback a schermo con il numero (ripristinato)
       setFeedback({
         name: nomComplet,
         bgColor: "bg-green-600",
         message: `ENTRATA VALIDA: N° ${numero}`, // Mostra il numero nella notifica
-        icon: "✅",
+        icon: (
+          <svg
+            className="w-16 h-16 text-white mx-auto"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth="3"
+              d="M5 13l4 4L19 7"
+            />
+          </svg>
+        ),
       });
 
       setTimeout(() => setFeedback(null), 4000);
@@ -601,11 +845,14 @@ export default function Dashboard() {
   const handleLogout = async () => {
     await createLog("LOGOUT", "Uscita dal sistema");
     localStorage.removeItem("unisp_user");
+    localStorage.removeItem("unisp_active_tab");
     window.location.href = "/";
   };
 
   useEffect(() => {
     let scanner = null;
+    let isMounted = true; // Sécurité pour éviter de mettre à jour l'état si le composant est fermé
+
     if (scanning && !manualInput) {
       scanner = new Html5Qrcode("reader");
       scanner
@@ -613,48 +860,93 @@ export default function Dashboard() {
           { facingMode: "environment" },
           { fps: 10, qrbox: { width: 250, height: 250 } },
           (decodedText) => {
-            handleScanSuccess(decodedText);
-            setScanning(false);
+            if (isMounted) {
+              handleScanSuccess(decodedText);
+              setScanning(false);
+            }
           },
           (error) => {
-            // On ignore les erreurs de scan continu pour ne pas polluer la console
+            // On ignore les erreurs de scan continu
           },
         )
         .catch((err) => console.error("Erreur caméra:", err));
     }
 
     return () => {
+      isMounted = false;
       if (scanner) {
-        scanner
-          .stop()
-          .catch((err) => console.error("Erreur arrêt scanner:", err));
+        try {
+          // On vérifie que le scanner est bien actif avant de l'arrêter
+          if (scanner.isScanning) {
+            scanner
+              .stop()
+              .catch((err) => console.log("Arrêt scanner ignoré:", err));
+          }
+        } catch (err) {
+          // On étouffe l'erreur si la librairie se plaint "Cannot stop..."
+          console.log("Le scanner n'était pas encore prêt à être arrêté.");
+        }
       }
     };
   }, [scanning, manualInput]);
 
-  const startScanner = () => {
-    // 1. Recuperiamo la tipologia (assicuriamoci che esista)
+  const startScanner = async () => {
+    // 1. Recuperiamo la tipologia locale per fare una prima scrematura
     const tipologia = user?.tipologia_socio?.toUpperCase();
 
-    // 2. Se sei ADMIN o STAFF, apri sempre la camera
+    // 2. Se sei ADMIN o STAFF, apri subito la camera (non li facciamo aspettare)
     if (tipologia === "ADMIN" || tipologia === "STAFF") {
       setManualInput(false);
       setScanning(true);
       return;
     }
 
-    // 3. Se sei VOLONTARIO, controlla l'autorizzazione delle 48h
+    // 3. Se sei VOLONTARIO, facciamo il controllo LIVE su Supabase (Just-in-Time!)
     if (tipologia === "VOLONTARIO") {
-      if (isAuthValid(user)) {
-        setManualInput(false);
-        setScanning(true);
-      } else {
-        setModalAlert({
-          title: "ACCESSO NEGATO",
-          message:
-            "Autorizzazione scaduta o non attiva. Contatta l'amministratore.",
-          icon: "🔒",
-        });
+      try {
+        // Interroghiamo il DB in tempo reale
+        const { data, error } = await supabase
+          .from("membres")
+          .select("auth_scan_active, auth_scan_expires_at, tipologia_socio")
+          .eq("id", user.id)
+          .single();
+
+        if (error) throw error;
+
+        // Aggiorniamo la memoria del telefono e lo stato React in silenzio
+        const updatedUser = { ...user, ...data };
+        localStorage.setItem("unisp_user", JSON.stringify(updatedUser));
+        setUser(updatedUser);
+
+        // Ora usiamo i dati APPENA SCARICATI per verificare se può scansionare
+        if (isAuthValid(updatedUser)) {
+          setManualInput(false);
+          setScanning(true);
+        } else {
+          setModalAlert({
+            title: "ACCESSO NEGATO",
+            message:
+              "Autorizzazione scaduta o non attiva. Contatta l'amministratore.",
+            icon: (
+              <svg
+                className="w-10 h-10 mx-auto mb-4 text-red-400 drop-shadow-[0_0_20px_rgba(248,113,113,0.7)]"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth="1.5"
+                  d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z"
+                />
+              </svg>
+            ),
+          });
+        }
+      } catch (err) {
+        console.error("Errore verifica live volontario:", err);
+        alert("Errore di connessione. Riprova.");
       }
       return;
     }
@@ -664,7 +956,21 @@ export default function Dashboard() {
       title: "NON AUTORIZZATO",
       message:
         "Solo lo staff e i volontari autorizzati possono usare lo scanner.",
-      icon: "🚫",
+      icon: (
+        <svg
+          className="w-10 h-10 mx-auto mb-4 text-red-400 drop-shadow-[0_0_20px_rgba(248,113,113,0.7)]"
+          fill="none"
+          stroke="currentColor"
+          viewBox="0 0 24 24"
+        >
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth="1.5"
+            d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"
+          />
+        </svg>
+      ),
     });
   };
 
@@ -677,16 +983,23 @@ export default function Dashboard() {
     }
     const parsed = JSON.parse(storedUser);
     setUser(parsed);
-    if (["STAFF", "ADMIN"].includes(parsed?.tipologia_socio?.toUpperCase())) {
+    const ruolo = parsed?.tipologia_socio?.toUpperCase();
+
+    // 1. TOUT LE MONDE (Staff, Admin ET Volontaires) a besoin de voir les passages d'aujourd'hui
+    if (["STAFF", "ADMIN", "VOLONTARIO"].includes(ruolo)) {
+      fetchPrenotazioniOggi();
+    }
+
+    // 2. SEULS les Staff et Admin téléchargent les données lourdes et sensibles (Membres complets, Historique, etc.)
+    if (["STAFF", "ADMIN"].includes(ruolo)) {
       fetchMembres();
-      fetchPassaggiOggi();
       supabase
         .from("alimenti")
         .select("*")
         .then(({ data }) => setAlimenti(data));
       supabase
         .from("passaggi")
-        .select("membre_id, scanned_at")
+        .select("nome_cognome, scanned_at")
         .then(({ data }) => setStoricoPassaggi(data));
     }
   }, []);
@@ -699,14 +1012,21 @@ export default function Dashboard() {
         showLogModal ||
         showExitModal ||
         scanning ||
-        feedback
+        feedback ||
+        showMassEmailModal
       ) {
         e.preventDefault();
-        setSelectedMembre(null);
-        setShowLogModal(false);
-        setShowExitModal(false);
-        setScanning(false);
-        setFeedback(null);
+
+        if (showMassEmailModal) {
+          setShowMassEmailModal(false);
+          setShowLogModal(true);
+        } else {
+          setSelectedMembre(null);
+          setShowLogModal(false);
+          setShowExitModal(false);
+          setScanning(false);
+          setFeedback(null);
+        }
 
         // Reinseriamo uno stato fittizio per "riprendere" il controllo del tasto indietro
         window.history.pushState(null, null, window.location.pathname);
@@ -737,7 +1057,7 @@ export default function Dashboard() {
     user?.tipologia_socio?.toUpperCase() === "ADMIN";
   const isAdmin = user?.tipologia_socio?.toUpperCase() === "ADMIN";
 
-  // LOGICA FILTRI RIPRISTINATA
+  // LOGICA FILTRI DELLA LISTA ADMIN (Ricerca testuale e bottoni rapidi)
   const filteredMembres = membres.filter((m) => {
     const matchesSearch = `${m.nome} ${m.cognome}`
       .toLowerCase()
@@ -751,66 +1071,80 @@ export default function Dashboard() {
       );
     if (filter === "VOLONTARIO")
       return matchesSearch && m.tipologia_socio?.toUpperCase() === "VOLONTARIO";
-    if (filter === "ACCESSI") return matchesSearch && isAuthValid(m); // RIPRISTINATO FILTRO ACCESSI
+    if (filter === "ACCESSI") return matchesSearch && isAuthValid(m);
     return matchesSearch;
+  }); // <-- ATTENZIONE: Questo chiude il filtro della barra di ricerca
+
+  // CALCOLO TARGET PER IL MODALE EMAIL (Basato sulle checkbox cliccate)
+  const membriTarget = membres.filter((m) => {
+    const matchStato =
+      filters.stati.length === 0 ||
+      filters.stati.includes(m.stato?.toUpperCase());
+    const matchRuolo =
+      filters.ruoli.length === 0 ||
+      filters.ruoli.includes(m.tipologia_socio?.toUpperCase());
+    return matchStato && matchRuolo;
   });
 
+  // QUI INIZIA LA UI
   return (
-    <Layout>
+    <Layout
+      onLogoutClick={() => setShowExitModal(true)}
+      onAdminClick={() => setShowLogModal(true)}
+      onMembriClick={() => setActiveTab("membres")}
+      onStatsClick={() => {
+        setActiveTab("stats"); // 1. Change l'onglet en arrière-plan
+        setShowLogModal(false); // 2. Ferme le Pannello Admin
+        setSelectedMembre(null); // 3. Ferme aussi les détails d'un membre s'ils étaient ouverts (sécurité)
+      }}
+    >
       <div className="space-y-6">
         <nav className="bg-slate-900/90 border border-white/10 backdrop-blur-xl h-14 rounded-full px-2 flex items-center shadow-2xl sticky top-2 z-[90]">
-          <div className="w-10 h-10 rounded-full bg-white flex items-center justify-center ml-1 flex-shrink-0 shadow-lg p-0.5 overflow-hidden">
+          {/* LOGO DEVIENT LE BOUTON DASHBOARD */}
+          <button
+            onClick={() => setActiveTab("dashboard")}
+            className={`w-10 h-10 rounded-full bg-white flex items-center justify-center ml-1 flex-shrink-0 shadow-lg p-0.5 overflow-hidden transition-all active:scale-90 ${activeTab === "dashboard" ? "ring-2 ring-blue-500" : ""}`}
+          >
             <Image
               src="/logo-unisp.png"
-              alt="Logo"
+              alt="Home"
               width={40}
               height={40}
               className="object-contain p-1"
               priority
             />
-          </div>
-          <div className="flex grow justify-center gap-6 px-2">
+          </button>
+
+          <div className="flex grow justify-center gap-6 px-4">
+            {/* PRENOTAZIONI -> SCANS */}
             <button
               onClick={() => setActiveTab("passages")}
-              className={`text-[10px] font-black uppercase tracking-widest ${activeTab === "passages" ? "text-blue-500" : "text-slate-500"}`}
+              className={`text-[10px] font-black uppercase tracking-widest transition-colors ${activeTab === "passages" ? "text-blue-500" : "text-slate-500 hover:text-slate-300"}`}
             >
-              Passaggi
+              Prenotazioni
             </button>
-            {isStaff && (
-              <>
-                <button
-                  onClick={() => setActiveTab("membres")}
-                  className={`text-[10px] font-black uppercase tracking-widest ${activeTab === "membres" ? "text-blue-500" : "text-slate-500"}`}
-                >
-                  Membri
-                </button>
-                <button
-                  onClick={() => setActiveTab("stats")}
-                  className={`text-[10px] font-black uppercase tracking-widest ${activeTab === "stats" ? "text-blue-500" : "text-slate-500"}`}
-                >
-                  Stat
-                </button>
-                {isAdmin && (
-                  <button
-                    onClick={() => setShowLogModal(true)}
-                    className="flex items-center justify-center"
-                  >
-                    {isProcessing ? (
-                      <div className="w-4 h-4 border-2 border-emerald-500/30 border-t-emerald-500 rounded-full animate-spin mx-2"></div>
-                    ) : (
-                      <span className="text-[10px] font-black uppercase tracking-widest text-slate-500 hover:text-emerald-500 px-2 transition-colors">
-                        ADMIN
-                      </span>
-                    )}
-                  </button>
-                )}
-              </>
-            )}
+
+            {/* DISTRIBUZIONE -> STOCK */}
+            <button
+              onClick={() => setActiveTab("distribuzione")}
+              className={`text-[10px] font-black uppercase tracking-widest transition-colors ${activeTab === "distribuzione" ? "text-blue-500" : "text-slate-500 hover:text-slate-300"}`}
+            >
+              Distribuzione
+            </button>
           </div>
         </nav>
 
-        {activeTab === "passages" ? (
-          <PassaggiView passaggi={passaggi} />
+        {/* LOGICA D'AFFICHAGE DES ONGLETS */}
+        {activeTab === "dashboard" ? (
+          <StatsView
+            membres={membres}
+            passaggi={storicoPassaggi}
+            alimentiData={alimenti}
+          />
+        ) : activeTab === "passages" ? (
+          <PassaggiView passaggi={prenotazioni} />
+        ) : activeTab === "distribuzione" ? (
+          <DistribuzioneView prenotazioni={prenotazioni} user={user} membres={membres}/>
         ) : activeTab === "membres" ? (
           <AdminView
             membres={filteredMembres}
@@ -826,13 +1160,7 @@ export default function Dashboard() {
             createLog={createLog}
             triggerAutoEmail={triggerAutoEmail}
           />
-        ) : (
-          <StatsView
-            membres={membres}
-            passaggi={storicoPassaggi}
-            alimentiData={alimenti}
-          />
-        )}
+        ) : null}
       </div>
 
       {!scanning && (
@@ -898,10 +1226,23 @@ export default function Dashboard() {
                   setConfirmAction({
                     title: "Genera PDF",
                     message: `Verrà generato un documento PDF con le tessere fedeltà di tutti i membri attivi.`,
-                    icon: "🪪",
+                    icon: (
+                      <svg
+                        className="w-10 h-10 mx-auto mb-4 text-purple-400 drop-shadow-[0_0_20px_rgba(168,85,247,0.7)]"
+                        fill="none"
+                        stroke="currentColor"
+                        viewBox="0 0 24 24"
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth="1.5"
+                          d="M15 9h3.75M15 12h3.75M15 15h3.75M4.5 19.5h15a2.25 2.25 0 002.25-2.25V6.75A2.25 2.25 0 0019.5 4.5h-15a2.25 2.25 0 00-2.25 2.25v10.5A2.25 2.25 0 004.5 19.5zm6-10.125a1.875 1.875 0 11-3.75 0 1.875 1.875 0 013.75 0zm1.294 6.336a6.721 6.721 0 01-3.17.789 6.721 6.721 0 01-3.168-.789 3.376 3.376 0 016.338 0z"
+                        />
+                      </svg>
+                    ),
                     color: "purple",
                     onConfirm: () => {
-                      // Qui chiameremo la funzione PDF che creeremo
                       generateAllCards();
                       setConfirmAction(null);
                     },
@@ -956,7 +1297,21 @@ export default function Dashboard() {
                         title: "Mese Mancante",
                         message:
                           "Seleziona almeno un mese dalla griglia qui sotto per scaricare i log.",
-                        icon: "⚠️",
+                        icon: (
+                          <svg
+                            className="w-10 h-10 mx-auto mb-4 text-amber-400 drop-shadow-[0_0_20px_rgba(251,191,36,0.7)]"
+                            fill="none"
+                            stroke="currentColor"
+                            viewBox="0 0 24 24"
+                          >
+                            <path
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              strokeWidth="1.5"
+                              d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
+                            />
+                          </svg>
+                        ),
                         color: "amber",
                         onConfirm: () => setConfirmAction(null),
                       });
@@ -965,7 +1320,21 @@ export default function Dashboard() {
                     setConfirmAction({
                       title: "Download Log",
                       message: `Stai per scaricare i registri attività per i mesi selezionati.`,
-                      icon: "📂",
+                      icon: (
+                        <svg
+                          className="w-10 h-10 mx-auto mb-4 text-emerald-400 drop-shadow-[0_0_20px_rgba(52,211,153,0.7)]"
+                          fill="none"
+                          stroke="currentColor"
+                          viewBox="0 0 24 24"
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth="1.5"
+                            d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3"
+                          />
+                        </svg>
+                      ),
                       color: "emerald",
                       onConfirm: () => {
                         downloadMonthlyLogs();
@@ -1035,7 +1404,7 @@ export default function Dashboard() {
 
       {/* MODALE DETTAGLI MEMBRO */}
       {selectedMembre && (
-        <div className="fixed inset-0 bg-slate-950/90 backdrop-blur-md z-[400] flex items-center justify-center p-4">
+        <div className="fixed inset-0 bg-slate-950/90 backdrop-blur-md z-[400] flex items-start pt-25 justify-center p-4">
           <div className="glass w-full max-w-md rounded-[2.5rem] border border-white/10 flex flex-col overflow-hidden max-h-[85vh]">
             <div className="p-6 bg-[#1e293b] border-b border-white/10 flex justify-between items-center">
               <h2 className="text-xl uppercase flex gap-2 flex-wrap justify-center">
@@ -1125,6 +1494,70 @@ export default function Dashboard() {
                       >
                         Vedi Documento →
                       </a>
+                    ) : k === "telefono" && v ? (
+                      <button
+                        onClick={() =>
+                          setConfirmAction({
+                            title: "Chiamata Rapida",
+                            message: `Vuoi avviare una telefonata verso ${selectedMembre.nome} ${selectedMembre.cognome}?`,
+                            icon: (
+                              <svg
+                                className="w-10 h-10 mx-auto mb-4 text-blue-400"
+                                fill="none"
+                                stroke="currentColor"
+                                viewBox="0 0 24 24"
+                              >
+                                <path
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                  strokeWidth="1.5"
+                                  d="M2.25 6.75c0 8.284 6.716 15 15 15h2.25a2.25 2.25 0 002.25-2.25v-1.372c0-.516-.351-.966-.852-1.091l-4.423-1.106c-.44-.11-.902.055-1.173.417l-.97 1.293c-.282.376-.769.542-1.21.387a12.035 12.035 0 01-7.108-7.108c-.155-.441.011-.928.387-1.21l1.293-.97c.363-.271.527-.734.417-1.173L6.963 3.102a1.125 1.125 0 00-1.091-.852H4.5A2.25 2.25 0 002.25 4.5v2.25z"
+                                />
+                              </svg>
+                            ),
+                            color: "blue",
+                            onConfirm: () => {
+                              window.location.href = `tel:${v}`;
+                              setConfirmAction(null);
+                            },
+                          })
+                        }
+                        className="text-blue-400 text-sm font-bold hover:text-blue-300 transition-colors group"
+                      >
+                        {v}
+                      </button>
+                    ) : k === "email" && v ? (
+                      <button
+                        onClick={() =>
+                          setConfirmAction({
+                            title: "Invia Email",
+                            message: `Aprire il client di posta per scrivere a ${v}?`,
+                            icon: (
+                              <svg
+                                className="w-10 h-10 mx-auto mb-4 text-blue-400"
+                                fill="none"
+                                stroke="currentColor"
+                                viewBox="0 0 24 24"
+                              >
+                                <path
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                  strokeWidth="1.5"
+                                  d="M21.75 6.75v10.5a2.25 2.25 0 01-2.25 2.25h-15a2.25 2.25 0 01-2.25-2.25V6.75m19.5 0A2.25 2.25 0 0019.5 4.5h-15a2.25 2.25 0 00-2.25 2.25m19.5 0v.243a2.25 2.25 0 01-1.07 1.916l-7.5 4.615a2.25 2.25 0 01-2.36 0L3.32 8.91a2.25 2.25 0 01-1.07-1.916V6.75"
+                                />
+                              </svg>
+                            ),
+                            color: "blue",
+                            onConfirm: () => {
+                              window.open(`mailto:${v}`, "_self");
+                              setConfirmAction(null);
+                            },
+                          })
+                        }
+                        className="text-blue-400 text-sm font-bold hover:text-blue-300 transition-colors group break-all text-left"
+                      >
+                        {v}
+                      </button>
                     ) : (
                       <p className="text-slate-100 text-sm font-medium">
                         {String(v || "-")}
@@ -1133,18 +1566,6 @@ export default function Dashboard() {
                   </div>
                 );
               })}
-
-              {/* PULSANTE POSIZIONATO QUI: In fondo alla lista, dentro lo scroll */}
-              {/* <div className="mt-4 pb-4 flex justify-center">
-                <button
-                  onClick={() => reSendSingleEmail(selectedMembre)}
-                  className="flex items-center gap-2 px-6 py-3 rounded-full bg-blue-500/10 hover:bg-blue-500/20 border border-blue-500/20 text-[9px] text-blue-400 uppercase font-black tracking-widest transition-all active:scale-95 shadow-lg"
-                >
-                  <span className="text-xs">✉️</span>
-                  Invia QR Code via Email
-                </button>
-              </div>*/}
-
               {/* SEZIONE AZIONI TESSERA SINGOLA */}
               <div className="mt-6">
                 {selectedMembre.stato === "ATTIVO" && (
@@ -1153,7 +1574,21 @@ export default function Dashboard() {
                       setConfirmAction({
                         title: "Genera e Invia",
                         message: `Vuoi generare la tessera per ${selectedMembre.nome} e inviarla subito via email?`,
-                        icon: "🪪",
+                        icon: (
+                          <svg
+                            className="w-12 h-12 mx-auto text-purple-400"
+                            fill="none"
+                            stroke="currentColor"
+                            viewBox="0 0 24 24"
+                          >
+                            <path
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              strokeWidth="1.5"
+                              d="M15 9h3.75M15 12h3.75M15 15h3.75M4.5 19.5h15a2.25 2.25 0 002.25-2.25V6.75A2.25 2.25 0 0019.5 4.5h-15a2.25 2.25 0 00-2.25 2.25v10.5A2.25 2.25 0 004.5 19.5zm6-10.125a1.875 1.875 0 11-3.75 0 1.875 1.875 0 013.75 0zm1.294 6.336a6.721 6.721 0 01-3.17.789 6.721 6.721 0 01-3.168-.789 3.376 3.376 0 016.338 0z"
+                            />
+                          </svg>
+                        ),
                         color: "purple",
                         onConfirm: () => {
                           handleSingleCardGeneration(selectedMembre);
@@ -1246,31 +1681,102 @@ export default function Dashboard() {
         <div className="fixed inset-0 z-[2000] flex items-center justify-center p-4 animate-in fade-in duration-300">
           <div
             className="absolute inset-0 bg-slate-950/90 backdrop-blur-xl"
-            onClick={() => setShowMassEmailModal(false)}
+            onClick={() => {
+              setShowMassEmailModal(false);
+              setShowLogModal(true); // Riapre il menu Admin
+            }}
           ></div>
 
-          <div className="relative glass bg-[#1e293b] border border-white/10 w-full max-w-lg rounded-[3rem] p-8 shadow-2xl overflow-hidden">
-            {/* Intestazione */}
-            <div className="text-center mb-8">
+          <div className="relative glass bg-[#1e293b] border border-white/10 w-full max-w-lg rounded-[3rem] p-8 shadow-2xl overflow-hidden overflow-y-auto max-h-[90vh]">
+            {/* INTESTAZIONE E FILTRI */}
+            <div className="text-center mb-6">
               <h2 className="text-white font-black text-xl uppercase tracking-tighter">
-                Nuova Comunicazione Massiva
+                Nuova Comunicazione
               </h2>
-              <p className="text-slate-500 text-[10px] uppercase font-bold tracking-widest mt-1">
-                Destinatari:{" "}
-                {membres.filter((m) => m.stato === "ATTIVO").length} Membri
-                Attivi
+              <p className="text-blue-400 text-[10px] font-bold uppercase mt-1">
+                Target:{" "}
+                {
+                  membres.filter((m) => {
+                    const s =
+                      filters.stati.length === 0 ||
+                      filters.stati.includes(m.stato?.toUpperCase());
+                    const r =
+                      filters.ruoli.length === 0 ||
+                      filters.ruoli.includes(m.tipologia_socio?.toUpperCase());
+                    return s && r;
+                  }).length
+                }{" "}
+                Membri Selezionati
               </p>
             </div>
 
+            <div className="space-y-4 mb-6">
+              <div>
+                <label className="text-[9px] font-black text-slate-500 uppercase ml-2 mb-1 block">
+                  Filtra per Stato
+                </label>
+                <div className="flex flex-wrap gap-1.5">
+                  {["ATTIVO", "INATTIVO", "SOSPESO", "ESCLUSO"].map((s) => (
+                    <button
+                      key={s}
+                      onClick={() =>
+                        setFilters({
+                          ...filters,
+                          stati: filters.stati.includes(s)
+                            ? filters.stati.filter((i) => i !== s)
+                            : [...filters.stati, s],
+                        })
+                      }
+                      className={`px-3 py-1.5 rounded-xl text-[9px] font-black transition-all border ${
+                        filters.stati.includes(s)
+                          ? "bg-blue-600 border-blue-500 text-white"
+                          : "bg-white/5 border-white/10 text-slate-400"
+                      }`}
+                    >
+                      {s}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <label className="text-[9px] font-black text-slate-500 uppercase ml-2 mb-1 block">
+                  Filtra per Ruolo
+                </label>
+                <div className="flex flex-wrap gap-1.5">
+                  {["PASSIVO", "VOLONTARIO", "STAFF", "ADMIN"].map((r) => (
+                    <button
+                      key={r}
+                      onClick={() =>
+                        setFilters({
+                          ...filters,
+                          ruoli: filters.ruoli.includes(r)
+                            ? filters.ruoli.filter((i) => i !== r)
+                            : [...filters.ruoli, r],
+                        })
+                      }
+                      className={`px-3 py-1.5 rounded-xl text-[9px] font-black transition-all border ${
+                        filters.ruoli.includes(r)
+                          ? "bg-emerald-600 border-emerald-500 text-white"
+                          : "bg-white/5 border-white/10 text-slate-400"
+                      }`}
+                    >
+                      {r}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* 2. DA QUI IN POI CONTINUA IL RESTO DEL TUO FORM (Subject, Message, File) */}
             <div className="space-y-5">
-              {/* Campo Oggetto */}
               <div>
                 <label className="text-[10px] font-black text-blue-400 uppercase ml-2 mb-2 block">
                   Oggetto della Email
                 </label>
                 <input
                   type="text"
-                  placeholder="Es: Avviso importante per i soci..."
+                  placeholder="Inserisci l'oggetto..."
                   className="w-full bg-slate-900/50 border border-white/10 rounded-2xl px-5 py-4 text-white outline-none focus:border-blue-500 transition-all font-bold"
                   value={emailForm.subject}
                   onChange={(e) =>
@@ -1279,6 +1785,8 @@ export default function Dashboard() {
                 />
               </div>
 
+              {/* ... e così via fino alla fine del modale */}
+
               {/* Campo Messaggio */}
               <div>
                 <label className="text-[10px] font-black text-blue-400 uppercase ml-2 mb-2 block">
@@ -1286,7 +1794,7 @@ export default function Dashboard() {
                 </label>
                 <textarea
                   rows="5"
-                  placeholder="Ciao {nome}, ti scriviamo per..."
+                  placeholder="Ti scriviamo per..."
                   className="w-full bg-slate-900/50 border border-white/10 rounded-2xl px-5 py-4 text-white outline-none focus:border-blue-500 transition-all text-sm leading-relaxed"
                   value={emailForm.message}
                   onChange={(e) =>
@@ -1298,7 +1806,7 @@ export default function Dashboard() {
               {/* AREA UPLOAD FILE (Sostituisce il vecchio interruttore) */}
               <div className="space-y-2">
                 <label className="text-[10px] font-black text-blue-400 uppercase ml-2 block">
-                  Allega un file dal telefono
+                  Allega un file
                 </label>
                 <div className="relative">
                   <input
@@ -1316,7 +1824,35 @@ export default function Dashboard() {
                     }`}
                   >
                     <span className="text-2xl">
-                      {selectedFile ? "📄" : "📁"}
+                      {selectedFile ? (
+                        <svg
+                          className="w-8 h-8 text-emerald-400"
+                          fill="none"
+                          stroke="currentColor"
+                          viewBox="0 0 24 24"
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth="2"
+                            d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+                          />
+                        </svg>
+                      ) : (
+                        <svg
+                          className="w-8 h-8 text-slate-400"
+                          fill="none"
+                          stroke="currentColor"
+                          viewBox="0 0 24 24"
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth="2"
+                            d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"
+                          />
+                        </svg>
+                      )}
                     </span>
                     <div className="flex flex-col text-left overflow-hidden">
                       <span
@@ -1351,7 +1887,10 @@ export default function Dashboard() {
               {/* Pulsanti Azione */}
               <div className="grid grid-cols-2 gap-3 pt-4">
                 <button
-                  onClick={() => setShowMassEmailModal(false)}
+                  onClick={() => {
+                    setShowMassEmailModal(false);
+                    setShowLogModal(true);
+                  }}
                   className="bg-white/5 py-4 rounded-2xl font-black text-slate-500 uppercase text-[10px] tracking-widest border border-white/5"
                 >
                   Annulla
@@ -1424,12 +1963,13 @@ export default function Dashboard() {
       )}
 
       {modalAlert && (
-        <div className="fixed inset-0 z-[600] flex items-center justify-center p-6 animate-in fade-in duration-300">
+        <div className="fixed inset-0 z-[3000] flex items-center justify-center p-6 animate-in fade-in duration-300">
           <div
             className="absolute inset-0 bg-slate-950/90 backdrop-blur-xl"
             onClick={() => setModalAlert(null)}
           ></div>
-          <div className="relative glass bg-slate-900 border border-white/10 w-full max-w-sm rounded-[3rem] p-8 text-center shadow-2xl">
+          <div className="relative glass bg-slate-900 border border-red-500/50 w-full max-w-sm rounded-[3rem] p-8 text-center shadow-2xl shadow-red-900/20">
+            {" "}
             <div className="text-6xl mb-4">{modalAlert.icon}</div>
             <h2 className="text-white font-black text-xl mb-3">
               {modalAlert.title}
@@ -1471,7 +2011,11 @@ export default function Dashboard() {
             <div className="flex flex-col gap-3">
               <button
                 onClick={confirmAction.onConfirm}
-                className={`w-full bg-${confirmAction.color}-600 py-4 rounded-2xl font-black text-white uppercase text-[10px] tracking-[0.2em] shadow-lg shadow-${confirmAction.color}-900/40 active:scale-95 transition-all`}
+                className={`w-full py-4 rounded-2xl font-black text-white uppercase text-[10px] tracking-[0.2em] shadow-lg active:scale-95 transition-all ${
+                  confirmAction.color === "blue"
+                    ? "bg-blue-600 shadow-blue-900/40"
+                    : "bg-purple-600 shadow-purple-900/40"
+                }`}
               >
                 Conferma Operazione
               </button>

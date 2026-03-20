@@ -9,7 +9,7 @@ export default async function handler(req, res) {
   const rowsToInsert = data.map(item => ({
     prodotto: item.prodotto,
     quantita: item.quantita,
-    unita_metrica: item.unita,
+    unita_metrica: item.unita_metrica,
     data_distribuzione: dateFile // La date extraite du fichier
   }));
 

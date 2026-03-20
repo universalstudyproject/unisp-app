@@ -1,5 +1,4 @@
 import React, { useState, useMemo } from "react";
-import Papa from "papaparse";
 import {
   BarChart,
   Bar,
@@ -26,10 +25,6 @@ export default function StatsView({
   alimentiData = [],
   setAlimenti,
 }) {
-  const [isUploading, setIsUploading] = useState(false);
-  const [showSuccessModal, setShowSuccessModal] = useState(false);
-  const [importStats, setImportStats] = useState({ date: "", count: 0 });
-
   // --- 1. TREND PRESENZE (Area Chart) ---
   const dataAffluenza = useMemo(() => {
     const perData = passaggi.reduce((acc, p) => {
@@ -45,7 +40,10 @@ export default function StatsView({
       .sort((a, b) => {
         const [dA, mA] = a.date.split("/");
         const [dB, mB] = b.date.split("/");
-        return new Date(2026, mA - 1, dA) - new Date(2026, mB - 1, dB);
+        const currentYear = new Date().getFullYear();
+        return (
+          new Date(currentYear, mA - 1, dA) - new Date(currentYear, mB - 1, dB)
+        );
       });
   }, [passaggi]);
 
@@ -168,7 +166,7 @@ export default function StatsView({
       .map((m) => {
         const presenze = new Set(
           passaggi
-            .filter((p) => p.membre_id === m.id)
+            .filter((p) => p.nome_cognome === `${m.nome} ${m.cognome}`)
             .map((p) => new Date(p.scanned_at).toLocaleDateString()),
         ).size;
 
@@ -225,78 +223,47 @@ export default function StatsView({
       .sort((a, b) => b.assenze - a.assenze);
   }, [membres, passaggi, totaleAttivita]);
 
-  const handleFileUpload = (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-    setIsUploading(true);
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      const lines = event.target.result.split("\n");
-      const dateRaw = lines[1]?.split(",")[0] || "Data Sconosciuta";
-      Papa.parse(lines.slice(2).join("\n"), {
-        header: true,
-        skipEmptyLines: true,
-        complete: async (results) => {
-          const processed = results.data
-            .filter((row) => row["ALIMENTI"])
-            .map((item) => {
-              const match = (item["QUANTITA'"] || "").match(
-                /(N\.|KG\.|PZ\.)\s*([\d,.]+)/i,
-              );
-              return {
-                prodotto: item["ALIMENTI"].trim(),
-                quantita: match ? parseFloat(match[2].replace(",", ".")) : 0,
-                unita: match ? match[1].replace(".", "").toUpperCase() : "N",
-              };
-            });
-          try {
-            const res = await fetch("/api/import-alimenti", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ data: processed, dateFile: dateRaw }),
-            });
-            if (res.ok) {
-              setImportStats({ date: dateRaw, count: processed.length });
-              setShowSuccessModal(true);
-            }
-          } catch (err) {
-            console.error(err);
-          } finally {
-            setIsUploading(false);
-          }
-        },
-      });
-    };
-    reader.readAsText(file);
-  };
-
   return (
     <div className="space-y-10 pb-40 animate-in fade-in duration-700">
       {/* HEADER STATS RAPIDE */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-4 gap-2 bg-white/[0.03] backdrop-blur-md rounded-2xl py-4 border border-white/5 shadow-2xl">
         {[
-          { label: "Totale Soci", val: membres.length, col: "text-blue-500" },
+          {
+            label: "Soci",
+            val: membres.length,
+            color: "from-blue-400 to-cyan-400",
+          },
           {
             label: "Attivi",
-            val: membres.filter((m) => m.stato?.toLowerCase() === "attivo")
+            val: membres.filter((m) => m.stato?.toUpperCase() === "ATTIVO")
               .length,
-            col: "text-emerald-500",
+            color: "from-emerald-400 to-teal-400",
           },
           {
             label: "Studenti",
-            val: dataStudenti[0].value,
-            col: "text-purple-500",
+            val: membres.filter(
+              (m) => m.is_studente === "SI" || m.is_studente === true,
+            ).length,
+            color: "from-purple-400 to-pink-400",
           },
-          { label: "Attività", val: totaleAttivita, col: "text-cyan-500" },
-        ].map((stat, i) => (
+          {
+            label: "Attività",
+            val: totaleAttivita,
+            color: "from-amber-400 to-orange-400",
+          },
+        ].map((s, i) => (
           <div
             key={i}
-            className="glass p-4 rounded-3xl border border-white/5 bg-white/5 transition-transform hover:scale-105"
+            className={`flex flex-col items-center justify-center ${i !== 3 ? "border-r border-white/5" : ""}`}
           >
-            <p className="text-[9px] uppercase font-black text-slate-500 tracking-widest">
-              {stat.label}
+            <p className="text-[8px] font-black uppercase tracking-[0.2em] text-slate-500 mb-1">
+              {s.label}
             </p>
-            <p className={`text-2xl font-black ${stat.col}`}>{stat.val}</p>
+            <p
+              className={`text-2xl font-black bg-gradient-to-br ${s.color} bg-clip-text text-transparent tracking-tighter`}
+            >
+              {s.val}
+            </p>
           </div>
         ))}
       </div>
@@ -554,64 +521,6 @@ export default function StatsView({
           )}
         </div>
       </section>
-
-      {/* 5. IMPORTAZIONE (IN FONDO) */}
-      <section className="pt-10 flex flex-col items-center">
-        <div className="glass p-10 rounded-[3rem] border border-dashed border-white/20 bg-blue-600/5 text-center group w-full">
-          <div className="w-20 h-20 bg-blue-600/10 rounded-full flex items-center justify-center mx-auto mb-6 transition-transform group-hover:scale-110 shadow-2xl">
-            <span className="text-3xl">📁</span>
-          </div>
-          <p className="text-slate-500 text-[10px] uppercase font-black tracking-widest mb-8">
-            Archivio Alimenti
-          </p>
-          <label
-            className={`w-full max-w-xs cursor-pointer ${isUploading ? "bg-slate-800" : "bg-blue-600 hover:bg-blue-500 shadow-2xl shadow-blue-600/30"} text-white py-5 px-10 rounded-[2rem] font-black text-[10px] uppercase tracking-widest transition-all inline-block active:scale-95`}
-          >
-            {isUploading ? "Analisi File..." : "Inserisci il csv"}
-            <input
-              type="file"
-              accept=".csv"
-              onChange={handleFileUpload}
-              className="hidden"
-              disabled={isUploading}
-            />
-          </label>
-        </div>
-      </section>
-
-      {/* MODAL DI SUCCESSO CUSTOM */}
-      {showSuccessModal && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 animate-in fade-in zoom-in duration-300">
-          <div
-            className="absolute inset-0 bg-black/80 backdrop-blur-md"
-            onClick={() => window.location.reload()}
-          />
-          <div className="glass relative w-full max-w-sm p-10 rounded-[3rem] border border-white/20 bg-slate-900/90 text-center shadow-2xl overflow-hidden">
-            <div className="absolute top-0 left-0 w-full h-1 bg-emerald-500" />
-            <div className="w-24 h-24 bg-emerald-500/20 rounded-full flex items-center justify-center mx-auto mb-8 border border-emerald-500/30">
-              <span className="text-5xl">✅</span>
-            </div>
-            <h3 className="text-white font-black text-2xl uppercase tracking-tighter mb-4">
-              Ottimo Lavoro!
-            </h3>
-            <p className="text-slate-400 text-sm mb-8 leading-relaxed px-2">
-              Inventario del{" "}
-              <span className="text-white font-bold">{importStats.date}</span> è
-              stato elaborato. Abbiamo registrato{" "}
-              <span className="text-emerald-400 font-bold">
-                {importStats.count}
-              </span>{" "}
-              nuovi prodotti nel database.
-            </p>
-            <button
-              onClick={() => window.location.reload()}
-              className="w-full bg-emerald-600 hover:bg-emerald-500 text-white py-5 rounded-[2rem] font-black text-xs uppercase tracking-widest transition-all shadow-xl shadow-emerald-600/20 active:scale-95"
-            >
-              Aggiorna Dashboard
-            </button>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
