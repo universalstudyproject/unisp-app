@@ -527,11 +527,13 @@ export default function Dashboard() {
   const fetchPrenotazioniOggi = async () => {
     const { data, error } = await supabase
       .from("prenotazioni")
-      .select(`id, scanned_at, numero_giornaliero, membres ( nome, cognome, tipologia_socio )`)
+      .select(
+        `id, scanned_at, numero_giornaliero, membres ( nome, cognome, tipologia_socio )`,
+      )
       .order("scanned_at", { ascending: false });
 
     if (error) {
-      console.error("Erreur de chargement des prenotazioni:", error); 
+      console.error("Erreur de chargement des prenotazioni:", error);
     }
     if (data) setPrenotazioni(data);
   };
@@ -1070,7 +1072,84 @@ export default function Dashboard() {
     };
   }, [selectedMembre, showLogModal, showExitModal, scanning, feedback]);
 
-  if (!mounted) return null;
+  if (!mounted || isProcessing) {
+    // Si l'app n'est pas encore montée sur le navigateur, on affiche le Splash Screen
+    return (
+      <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center relative overflow-hidden">
+        {/* Effet de lueur en arrière-plan */}
+        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-64 h-64 bg-blue-500/20 blur-[80px] rounded-full pointer-events-none animate-pulse" />
+
+        {/* Logo animé (respiration) */}
+        <div className="relative animate-pulse flex flex-col items-center z-10">
+          {/* Assure-toi que le nom de ton image est bien logo-unisp.png ou change-le ici */}
+          <img
+            src="/logo-unisp.png"
+            alt="UniSP"
+            className="w-32 h-32 object-contain drop-shadow-[0_0_25px_rgba(59,130,246,0.5)]"
+          />
+        </div>
+
+        {/* Petit texte et spinner en bas de l'écran */}
+        <div className="absolute bottom-20 flex flex-col items-center gap-4 z-10">
+          <div className="w-8 h-8 border-4 border-slate-800 border-t-blue-500 rounded-full animate-spin shadow-[0_0_15px_rgba(59,130,246,0.5)]" />
+          <span className="text-blue-500/50 text-[10px] font-black uppercase tracking-[0.3em]">
+            Avvio in corso...
+          </span>
+        </div>
+      </div>
+    );
+  }
+  // --- BLOCAGE DE SÉCURITÉ POUR LES MEMBRES NON ACTIFS ---
+  const isVolontarioOrPassivo = ["VOLONTARIO", "PASSIVO"].includes(
+    user?.tipologia_socio?.toUpperCase(),
+  );
+  const isNotActive = user?.stato?.toUpperCase() !== "ATTIVO";
+
+  if (isVolontarioOrPassivo && isNotActive) {
+    return (
+      <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center p-6 animate-in fade-in duration-700">
+        <div className="glass p-8 rounded-[3rem] border border-red-500/20 bg-slate-900/80 max-w-md w-full text-center shadow-2xl space-y-6 relative overflow-hidden">
+          <div className="absolute top-0 left-1/2 -translate-x-1/2 w-32 h-32 bg-red-500/20 blur-[50px] rounded-full pointer-events-none" />
+          <div className="w-20 h-20 bg-red-500/10 rounded-full flex items-center justify-center mx-auto border border-red-500/20">
+            <svg
+              className="w-10 h-10 text-red-500 drop-shadow-[0_0_15px_rgba(239,68,68,0.5)]"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth="1.5"
+                d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z"
+              />
+            </svg>
+          </div>
+          <h1 className="text-white text-2xl font-black uppercase tracking-widest">
+            Accesso Negato
+          </h1>
+          <p className="text-slate-400 text-sm leading-relaxed">
+            Non puoi accedere all&apos;applicazione perché il tuo stato attuale
+            è:
+          </p>
+          <div className="inline-block px-6 py-3 rounded-2xl bg-red-500/10 border border-red-500/30 text-red-500 font-black uppercase tracking-widest text-xl shadow-[0_0_15px_rgba(239,68,68,0.2)]">
+            {user?.stato || "Sconosciuto"}
+          </div>
+          <p className="text-slate-500 text-xs mt-4">
+            Contatta lo staff per maggiori informazioni e per regolarizzare la
+            tua posizione.
+          </p>
+          <button
+            onClick={handleLogout}
+            className="mt-8 w-full py-4 rounded-2xl bg-white/5 border border-white/10 text-white font-bold uppercase text-xs tracking-widest hover:bg-white/10 transition-colors active:scale-95"
+          >
+            Torna al Login (Esci)
+          </button>
+        </div>
+      </div>
+    );
+  }
+  // --- FIN DU BLOCAGE DE SÉCURITÉ ---
   const isStaff =
     user?.tipologia_socio?.toUpperCase() === "STAFF" ||
     user?.tipologia_socio?.toUpperCase() === "ADMIN";
