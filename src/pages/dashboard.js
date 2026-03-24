@@ -527,7 +527,7 @@ export default function Dashboard() {
   const fetchPrenotazioniOggi = async () => {
     const { data, error } = await supabase
       .from("prenotazioni")
-      .select(`id, scanned_at, numero_giornaliero, membres ( nome, cognome )`)
+      .select(`id, scanned_at, numero_giornaliero, membres ( nome, cognome, tipologia_socio )`)
       .order("scanned_at", { ascending: false });
 
     if (error) {

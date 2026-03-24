@@ -27,7 +27,13 @@ export default function PassaggiView({ passaggi }) {
 
             {/* NUMERO GIORNALIERO DESIGN "PILL" */}
             <div className="flex flex-col items-center gap-1">
-              <span className="bg-green-600 text-white text-sm px-2.5 py-0.5 rounded-xl font-black shadow-md shadow-green-600/20 min-w-[35px] text-center leading-tigh">
+              <span
+                className={`text-white text-sm px-2.5 py-0.5 rounded-xl font-black shadow-md min-w-[35px] text-center leading-tight ${
+                  p.membres?.tipologia_socio?.toUpperCase() === "PASSIVO"
+                    ? "bg-blue-600 shadow-blue-600/20"
+                    : "bg-green-600 shadow-green-600/20"
+                }`}
+              >
                 {p.numero_giornaliero}
               </span>
             </div>
