@@ -1073,29 +1073,18 @@ export default function Dashboard() {
   }, [selectedMembre, showLogModal, showExitModal, scanning, feedback]);
 
   if (!mounted || isProcessing) {
-    // Si l'app n'est pas encore montée sur le navigateur, on affiche le Splash Screen
     return (
       <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center relative overflow-hidden">
-        {/* Effet de lueur en arrière-plan */}
-        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-64 h-64 bg-blue-500/20 blur-[80px] rounded-full pointer-events-none animate-pulse" />
-
-        {/* Logo animé (respiration) */}
-        <div className="relative animate-pulse flex flex-col items-center z-10">
-          {/* Assure-toi que le nom de ton image est bien logo-unisp.png ou change-le ici */}
-          <img
-            src="/logo-unisp.png"
-            alt="UniSP"
-            className="w-32 h-32 object-contain drop-shadow-[0_0_25px_rgba(59,130,246,0.5)]"
-          />
+        {/* Barre de chargement horizontale minimale */}
+        <div className="w-48 h-[3px] bg-slate-800 rounded-full overflow-hidden relative">
+          {/* L'animation de la barre bleue */}
+          <div className="absolute top-0 left-0 h-full bg-blue-500 w-full animate-pulse shadow-[0_0_15px_rgba(59,130,246,0.6)]" />
         </div>
 
-        {/* Petit texte et spinner en bas de l'écran */}
-        <div className="absolute bottom-20 flex flex-col items-center gap-4 z-10">
-          <div className="w-8 h-8 border-4 border-slate-800 border-t-blue-500 rounded-full animate-spin shadow-[0_0_15px_rgba(59,130,246,0.5)]" />
-          <span className="text-blue-500/50 text-[10px] font-black uppercase tracking-[0.3em]">
-            Avvio in corso...
-          </span>
-        </div>
+        {/* Petit texte très discret en dessous */}
+        <span className="mt-6 text-blue-500/40 text-[8px] font-black uppercase tracking-[0.4em]">
+          Caricamento
+        </span>
       </div>
     );
   }
