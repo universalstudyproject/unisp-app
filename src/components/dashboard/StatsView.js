@@ -1,4 +1,5 @@
 import React, { useState, useMemo } from "react";
+import { supabase } from "../../lib/supabase";
 import {
   BarChart,
   Bar,
@@ -24,6 +25,7 @@ export default function StatsView({
   passaggi,
   alimentiData = [],
   setAlimenti,
+  currentUser,
 }) {
   // --- 1. TREND PRESENZE (Area Chart) ---
   const dataAffluenza = useMemo(() => {
@@ -157,6 +159,7 @@ export default function StatsView({
 
   // --- 6. LOGICA ASSENZE CRITICHE ---
   const totaleAttivita = dataAffluenza.length;
+
   const inRischio = useMemo(() => {
     return membres
       .filter((m) => {
@@ -164,39 +167,59 @@ export default function StatsView({
         return tipo === "VOLONTARIO" || tipo === "PASSIVO";
       })
       .map((m) => {
+        // 1. Présences réelles du membre
         const presenze = new Set(
           passaggi
             .filter((p) => p.nome_cognome === `${m.nome} ${m.cognome}`)
             .map((p) => new Date(p.scanned_at).toLocaleDateString()),
         ).size;
 
-        const assenze = totaleAttivita - presenze;
+        // 2. Jours d'activité valides depuis sa date d'inscription
+        const dataIscrizione = m.created_at
+          ? new Date(m.created_at)
+          : new Date(0);
+        dataIscrizione.setHours(0, 0, 0, 0);
 
-        // --- LOGICA AUTOMATICA SOSPESO & EMAIL ---
-        // Eseguiamo il controllo solo se il membro è ancora "ATTIVO"
+        const attivitaValide = dataAffluenza.filter((giorno) => {
+          const [g, mese, a] = giorno.date.split("/");
+          const dateAttivita = new Date(a, mese - 1, g);
+          return dateAttivita >= dataIscrizione;
+        }).length;
+
+        // 3. Calcul des absences
+        const assenze =
+          attivitaValide > presenze ? attivitaValide - presenze : 0;
+
+        // --- ENVOI EMAILS SÉCURISÉ ---
         if (m.stato?.toUpperCase() === "ATTIVO") {
-          if (assenze === 4) {
-            // Invia Mail di Avviso (4 assenze)
-            fetch("/api/notify-absence", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                membreId: m.id,
-                type: "WARNING",
-                email: m.email,
-                nome: m.nome,
-              }),
-            }).catch((e) => console.error("Errore invio mail avviso", e));
-          }
-
-          if (assenze >= 5) {
-            // 1. Cambia Stato in SOSPESO nel DB
+          // AVERTISSEMENT (4 absences)
+          if (assenze === 4 && m.avviso_inviato !== true) {
             supabase
               .from("membres")
-              .update({ stato: "SOSPESO" })
+              .update({ avviso_inviato: true })
               .eq("id", m.id)
               .then(() => {
-                // 2. Invia Mail di Sospensione
+                fetch("/api/notify-absence", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    membreId: m.id,
+                    type: "WARNING",
+                    email: m.email,
+                    nome: m.nome,
+                  }),
+                }).catch((e) => console.error("Errore invio mail avviso", e));
+              })
+              .catch((e) => console.error("Errore aggiornamento DB avviso", e));
+          }
+
+          // SUSPENSION (>= 5 absences)
+          if (assenze >= 5 && m.sospensione_inviata !== true) {
+            supabase
+              .from("membres")
+              .update({ stato: "SOSPESO", sospensione_inviata: true })
+              .eq("id", m.id)
+              .then(() => {
                 fetch("/api/notify-absence", {
                   method: "POST",
                   headers: { "Content-Type": "application/json" },
@@ -206,22 +229,27 @@ export default function StatsView({
                     email: m.email,
                     nome: m.nome,
                   }),
-                });
+                }).catch((e) =>
+                  console.error("Errore invio mail sospensione", e),
+                );
               })
-              .catch((e) => console.error("Errore sospensione automatica", e));
+              .catch((e) =>
+                console.error("Errore sospensione automatica DB", e),
+              );
           }
         }
 
         return {
+          id: m.id,
           nome: `${m.nome} ${m.cognome}`,
-          assenze: assenze > 0 ? assenze : 0,
-          perc: totaleAttivita > 0 ? (presenze / totaleAttivita) * 100 : 0,
+          assenze: assenze,
+          perc: attivitaValide > 0 ? (presenze / attivitaValide) * 100 : 0,
           statoAttuale: m.stato?.toUpperCase(),
         };
       })
       .filter((m) => m.assenze >= 4)
       .sort((a, b) => b.assenze - a.assenze);
-  }, [membres, passaggi, totaleAttivita]);
+  }, [membres, passaggi, dataAffluenza]); // ... tout ton code inRischio ...
 
   return (
     <div className="space-y-10 pb-40 animate-in fade-in duration-700">
@@ -242,7 +270,7 @@ export default function StatsView({
           {
             label: "Studenti",
             val: membres.filter(
-              (m) => m.is_studente === "SI" || m.is_studente === true,
+              (m) => m.is_studente === "SI" && m.stato === "ATTIVO",
             ).length,
             color: "from-purple-400 to-pink-400",
           },
@@ -483,42 +511,160 @@ export default function StatsView({
         </div>
       </div>
 
-      {/* 4. SEZIONE CRITICA: ASSENZE */}
-      <section className="space-y-4">
-        <div className="flex justify-between items-center px-2">
-          <h2 className="text-white font-black text-xs uppercase tracking-widest opacity-50 italic">
-            Controllo Frequenza Critica
-          </h2>
-        </div>
-        <div className="glass p-6 rounded-[2.5rem] border border-white/10 bg-red-500/5 space-y-4 shadow-xl">
-          {inRischio.length === 0 ? (
-            <p className="text-center text-slate-500 text-[10px] font-black uppercase py-6 tracking-widest">
-              Nessuna criticità rilevata
-            </p>
-          ) : (
-            inRischio.map((m, i) => (
-              <div key={i} className="space-y-2">
-                <div className="flex justify-between items-end text-[10px] font-black uppercase">
-                  <span className="text-white">{m.nome}</span>
-                  <span
-                    className={
-                      m.assenze >= 5
-                        ? "text-red-500 animate-pulse"
-                        : "text-yellow-500"
+      {/* 4. SEZIONE FREQUENZA E CRITICITÀ */}
+      <section className="space-y-6">
+        {/* --- PARTIE 1 : PRÉSENCES ET ABSENCES (GRAPHIQUE AVEC NOMS) --- */}
+        <div className="space-y-4">
+          <div className="flex justify-between items-center px-2">
+            <h2 className="text-white font-black text-xs uppercase tracking-widest opacity-50 italic">
+              {["STAFF", "ADMIN"].includes(
+                currentUser?.tipologia_socio?.toUpperCase(),
+              )
+                ? "Frequenza: Volontari e Passivi"
+                : "La Mia Frequenza"}
+            </h2>
+          </div>
+          <div className="glass p-6 rounded-[2.5rem] border border-white/10 bg-slate-900/40 space-y-4 shadow-xl h-80">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart
+                data={membres
+                  .filter((m) => {
+                    // Filtrage selon le rôle
+                    if (
+                      ["STAFF", "ADMIN"].includes(
+                        currentUser?.tipologia_socio?.toUpperCase(),
+                      )
+                    ) {
+                      return ["PASSIVO", "VOLONTARIO"].includes(
+                        m.tipologia_socio?.toUpperCase(),
+                      );
                     }
-                  >
-                    {m.assenze} ASSENZE
-                  </span>
-                </div>
-                <div className="h-1.5 w-full bg-slate-800 rounded-full overflow-hidden">
-                  <div
-                    className={`h-full transition-all duration-1000 ${m.assenze >= 5 ? "bg-red-600 shadow-[0_0_10px_rgba(239,68,68,0.5)]" : "bg-yellow-500"}`}
-                    style={{ width: `${m.perc}%` }}
-                  />
-                </div>
-              </div>
-            ))
-          )}
+                    return m.id === currentUser?.id;
+                  })
+                  .map((m) => ({
+                    // ICI : On remet le vrai Nom et Prénom
+                    name: `${m.nome} ${m.cognome}`,
+                    Presenze: m.presenze || 0,
+                    Assenze: m.assenze || 0,
+                  }))}
+                margin={{ top: 10, right: 10, left: -20, bottom: 25 }}
+              >
+                <CartesianGrid
+                  strokeDasharray="3 3"
+                  stroke="#ffffff05"
+                  vertical={false}
+                />
+
+                <XAxis
+                  dataKey="name"
+                  tick={false}
+                  axisLine={false}
+                  tickLine={false}
+                />
+
+                <YAxis
+                  stroke="#64748b"
+                  fontSize={10}
+                  axisLine={false}
+                  tickLine={false}
+                  allowDecimals={false}
+                />
+                <Tooltip
+                  contentStyle={{
+                    backgroundColor: "#1e293b",
+                    borderRadius: "15px",
+                    border: "none",
+                    fontSize: "12px",
+                    fontWeight: "900",
+                    color: "#fff",
+                  }}
+                  cursor={{ fill: "#ffffff05" }}
+                />
+                <Legend
+                  wrapperStyle={{
+                    fontSize: "10px",
+                    fontWeight: "bold",
+                    paddingTop: "20px",
+                  }}
+                  iconType="circle"
+                />
+
+                {/* Barre des présences (Verte) */}
+                <Bar
+                  dataKey="Presenze"
+                  fill="#10b981"
+                  radius={[4, 4, 0, 0]}
+                  barSize={12}
+                />
+                {/* Barre des absences (Orange) */}
+                <Bar
+                  dataKey="Assenze"
+                  fill="#f59e0b"
+                  radius={[4, 4, 0, 0]}
+                  barSize={12}
+                />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+
+        {/* --- PARTIE 2 : ALERTES CRITIQUES --- */}
+        <div className="space-y-4">
+          <div className="flex justify-between items-center px-2">
+            <h2 className="text-white font-black text-xs uppercase tracking-widest opacity-50 italic">
+              Controllo Frequenza Critica
+            </h2>
+          </div>
+          <div className="glass p-6 rounded-[2.5rem] border border-white/10 bg-red-500/5 space-y-4 shadow-xl">
+            {inRischio.filter((m) => {
+              // Si Staff/Admin : on montre tous les membres en risque
+              if (
+                ["STAFF", "ADMIN"].includes(
+                  currentUser?.tipologia_socio?.toUpperCase(),
+                )
+              )
+                return true;
+              // Sinon : on ne montre l'alerte que si c'est l'utilisateur lui-même
+              return m.id === currentUser?.id;
+            }).length === 0 ? (
+              <p className="text-center text-slate-500 text-[10px] font-black uppercase py-6 tracking-widest">
+                Nessuna criticità rilevata
+              </p>
+            ) : (
+              inRischio
+                .filter((m) => {
+                  if (
+                    ["STAFF", "ADMIN"].includes(
+                      currentUser?.tipologia_socio?.toUpperCase(),
+                    )
+                  )
+                    return true;
+                  return m.id === currentUser?.id;
+                })
+                .map((m, i) => (
+                  <div key={i} className="space-y-2">
+                    <div className="flex justify-between items-end text-[10px] font-black uppercase">
+                      <span className="text-white">{m.nome}</span>
+                      <span
+                        className={
+                          m.assenze >= 5
+                            ? "text-red-500 animate-pulse"
+                            : "text-yellow-500"
+                        }
+                      >
+                        {m.assenze} ASSENZE
+                      </span>
+                    </div>
+                    <div className="h-1.5 w-full bg-slate-800 rounded-full overflow-hidden">
+                      <div
+                        className={`h-full transition-all duration-1000 ${m.assenze >= 5 ? "bg-red-600 shadow-[0_0_10px_rgba(239,68,68,0.5)]" : "bg-yellow-500"}`}
+                        style={{ width: `${m.perc}%` }}
+                      />
+                    </div>
+                  </div>
+                ))
+            )}
+          </div>
         </div>
       </section>
     </div>

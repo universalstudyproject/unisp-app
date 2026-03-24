@@ -32,7 +32,7 @@ export default async function handler(req, res) {
           Il tuo QR Code è stato disattivato automaticamente.
         </p>
         <p style="color: #666; font-size: 13px; margin-top: 20px;">
-          Per riattivare la tua iscrizione, ti preghiamo di contattare la segreteria o lo staff dell'UNISP.
+          Per riattivare la tua iscrizione, ti preghiamo di contattare lo staff dell'UNISP.
         </p>
       </div>
     </div>

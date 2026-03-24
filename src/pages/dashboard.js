@@ -16,6 +16,7 @@ export default function Dashboard() {
   const [mounted, setMounted] = useState(false);
   const [prenotazioni, setPrenotazioni] = useState([]);
   const [membres, setMembres] = useState([]);
+  const [singleEmailTarget, setSingleEmailTarget] = useState(null);
   const [activeTab, setActiveTab] = useState(() => {
     if (typeof window !== "undefined") {
       return localStorage.getItem("unisp_active_tab") || "dashboard";
@@ -28,7 +29,7 @@ export default function Dashboard() {
   const [storicoPassaggi, setStoricoPassaggi] = useState([]);
   const [showExitModal, setShowExitModal] = useState(false);
   const [confirmAction, setConfirmAction] = useState(null);
-  const [selectedFile, setSelectedFile] = useState(null);
+  const [selectedFiles, setSelectedFiles] = useState([]);
 
   const [showMassEmailModal, setShowMassEmailModal] = useState(false);
   const [emailForm, setEmailForm] = useState({
@@ -179,17 +180,31 @@ export default function Dashboard() {
     fetchMembres();
   };
 
+  // Fonction pour ajouter un file à la liste (dans ton input onChange)
+  const handleFileChange = (e) => {
+    const files = Array.from(e.target.files);
+    setSelectedFiles((prev) => [...prev, ...files]);
+  };
+
+  // Fonction pour supprimer un file spécifique de la liste
+  const removeFile = (index) => {
+    setSelectedFiles((prev) => prev.filter((_, i) => i !== index));
+  };
+
   const handleStartMassSending = async () => {
-    // 1. FILTRAGGIO COMBINATO
-    const membriTarget = membres.filter((m) => {
-      const matchStato =
-        filters.stati.length === 0 ||
-        filters.stati.includes(m.stato?.toUpperCase());
-      const matchRuolo =
-        filters.ruoli.length === 0 ||
-        filters.ruoli.includes(m.tipologia_socio?.toUpperCase());
-      return matchStato && matchRuolo;
-    });
+    // CALCOLO TARGET PER IL MODALE EMAIL
+    const membriTarget = singleEmailTarget
+      ? [singleEmailTarget] // <-- Mode "Un seul membre"
+      : membres.filter((m) => {
+          // <-- Mode "Massif"
+          const matchStato =
+            filters.stati.length === 0 ||
+            filters.stati.includes(m.stato?.toUpperCase());
+          const matchRuolo =
+            filters.ruoli.length === 0 ||
+            filters.ruoli.includes(m.tipologia_socio?.toUpperCase());
+          return matchStato && matchRuolo;
+        });
 
     // Validazione Target con Modal
     if (membriTarget.length === 0) {
@@ -266,24 +281,28 @@ export default function Dashboard() {
 
         let allegatoUrl = null;
 
+        let allegatiUrls = [];
         try {
           // 2. CARICAMENTO FILE
-          if (selectedFile) {
+          if (selectedFiles.length > 0) {
             setFeedback({
               type: "loading",
-              message: "Caricamento file...",
-              name: "UPLOAD",
+              message: `Caricamento di ${selectedFiles.length} file...`,
+              name: "UPLOAD IN CORSO",
             });
-            const fileName = `comunicazioni/${Date.now()}_${selectedFile.name}`;
-            const { error: uploadError } = await supabase.storage
-              .from("tessere")
-              .upload(fileName, selectedFile);
 
-            if (!uploadError) {
-              const {
-                data: { publicUrl },
-              } = supabase.storage.from("tessere").getPublicUrl(fileName);
-              allegatoUrl = publicUrl;
+            for (const file of selectedFiles) {
+              const fileName = `comunicazioni/${Date.now()}_${file.name}`;
+              const { error: uploadError } = await supabase.storage
+                .from("tessere")
+                .upload(fileName, file);
+
+              if (!uploadError) {
+                const {
+                  data: { publicUrl },
+                } = supabase.storage.from("tessere").getPublicUrl(fileName);
+                allegatiUrls.push(publicUrl);
+              }
             }
           }
 
@@ -305,7 +324,7 @@ export default function Dashboard() {
                 nomeMembro: m.nome,
                 subject: emailForm.subject,
                 message: emailForm.message.replace(/{nome}/g, m.nome),
-                allegatoUrl: allegatoUrl,
+                allegatiUrls: allegatiUrls,
               }),
             });
 
@@ -359,8 +378,9 @@ export default function Dashboard() {
           });
         } finally {
           setIsProcessing(false);
-          setSelectedFile(null);
+          setSelectedFiles([]);
           setFilters({ stati: [], ruoli: [] });
+          setSingleEmailTarget(null);
         }
       },
     });
@@ -401,41 +421,36 @@ export default function Dashboard() {
     setIsProcessing(true);
     let processati = 0;
 
-    for (const membro of membriDaProcessare) {
-      try {
-        // Aggiorniamo il feedback visivo per l'utente
-        setFeedback({
-          type: "loading",
-          message: `Generazione in corso: ${processati + 1} di ${membriDaProcessare.length}...`,
-        });
+    // VERSION ULTRA-RAPIDE (Lots de 3)
+    for (let i = 0; i < membriDaProcessare.length; i += 3) {
+      // On prend un groupe de 3 membres
+      const batch = membriDaProcessare.slice(i, i + 3);
 
-        console.log(
-          `[BATCH] Generazione per: ${membro.nome} ${membro.cognome}`,
-        );
+      setFeedback({
+        type: "loading",
+        message: `Generazione in corso: ${i + 1} di ${membriDaProcessare.length}...`,
+      });
 
-        // Chiamiamo l'API del singolo membro (quella che abbiamo perfezionato prima)
-        const res = await fetch("/api/generate-single-card", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ memberId: membro.id }),
-        });
+      // On lance les 3 requêtes en même temps
+      await Promise.all(
+        batch.map(async (membro) => {
+          try {
+            const res = await fetch("/api/generate-single-card", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ memberId: membro.id }),
+            });
+            const data = await res.json();
+            if (data.success) processati++;
+          } catch (err) {
+            console.error(`Errore per ${membro.nome}:`, err);
+          }
+        }),
+      );
 
-        const data = await res.json();
-
-        if (!data.success) {
-          console.error(`Errore per ${membro.nome}:`, data.message);
-          // Decidi se fermarti o continuare. Qui continuiamo.
-        } else {
-          processati++;
-        }
-
-        // Attesa di 5 secondi per non sovraccaricare Gmail e il DB
-        if (processati < membriDaProcessare.length) {
-          console.log("Attesa 5 secondi prima del prossimo invio...");
-          await new Promise((resolve) => setTimeout(resolve, 5000));
-        }
-      } catch (err) {
-        console.error("Errore critico nel loop:", err);
+      // Petite pause de sécurité de 2 secondes entre chaque groupe de 3
+      if (i + 3 < membriDaProcessare.length) {
+        await new Promise((resolve) => setTimeout(resolve, 2000));
       }
     }
 
@@ -510,10 +525,14 @@ export default function Dashboard() {
   };
 
   const fetchPrenotazioniOggi = async () => {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from("prenotazioni")
       .select(`id, scanned_at, numero_giornaliero, membres ( nome, cognome )`)
       .order("scanned_at", { ascending: false });
+
+    if (error) {
+      console.error("Erreur de chargement des prenotazioni:", error); 
+    }
     if (data) setPrenotazioni(data);
   };
 
@@ -1090,12 +1109,28 @@ export default function Dashboard() {
   return (
     <Layout
       onLogoutClick={() => setShowExitModal(true)}
-      onAdminClick={() => setShowLogModal(true)}
-      onMembriClick={() => setActiveTab("membres")}
+      onAdminClick={() => {
+        setShowLogModal(true);
+        setShowMassEmailModal(false); // Ferme le mail
+        setSingleEmailTarget(null); // Oublie le destinataire
+        setSelectedMembre(null);
+        setConfirmAction(null);
+      }}
+      onMembriClick={() => {
+        setActiveTab("membres");
+        setShowMassEmailModal(false); // Ferme le mail
+        setSingleEmailTarget(null); // Oublie le destinataire
+        setShowLogModal(false);
+        setConfirmAction(null);
+        setSelectedMembre(null);
+      }}
       onStatsClick={() => {
-        setActiveTab("stats"); // 1. Change l'onglet en arrière-plan
-        setShowLogModal(false); // 2. Ferme le Pannello Admin
-        setSelectedMembre(null); // 3. Ferme aussi les détails d'un membre s'ils étaient ouverts (sécurité)
+        setActiveTab("stats");
+        setShowLogModal(false);
+        setSelectedMembre(null);
+        setShowMassEmailModal(false); // Ferme le mail
+        setSingleEmailTarget(null); // Oublie le destinataire
+        setConfirmAction(null);
       }}
     >
       <div className="space-y-6">
@@ -1140,11 +1175,16 @@ export default function Dashboard() {
             membres={membres}
             passaggi={storicoPassaggi}
             alimentiData={alimenti}
+            currentUser={user}
           />
         ) : activeTab === "passages" ? (
           <PassaggiView passaggi={prenotazioni} />
         ) : activeTab === "distribuzione" ? (
-          <DistribuzioneView prenotazioni={prenotazioni} user={user} membres={membres}/>
+          <DistribuzioneView
+            prenotazioni={prenotazioni}
+            user={user}
+            membres={membres}
+          />
         ) : activeTab === "membres" ? (
           <AdminView
             membres={filteredMembres}
@@ -1186,7 +1226,7 @@ export default function Dashboard() {
 
       {/* MODALE PANNELLO ADMIN */}
       {showLogModal && (
-        <div className="fixed inset-0 z-[1000] flex items-center justify-center p-6 animate-in fade-in duration-300">
+        <div className="fixed inset-0 z-[1000] flex items-start pt-28 justify-center p-6 animate-in fade-in duration-300">
           <div
             className="absolute inset-0 bg-slate-950/90 backdrop-blur-xl"
             onClick={() => setShowLogModal(false)}
@@ -1490,9 +1530,9 @@ export default function Dashboard() {
                       <a
                         href={v}
                         target="_blank"
-                        className="text-blue-400 text-sm font-medium underline break-all"
+                        className="text-green-500 text-sm font-medium break-all"
                       >
-                        Vedi Documento →
+                        Vedi Documento
                       </a>
                     ) : k === "telefono" && v ? (
                       <button
@@ -1549,8 +1589,9 @@ export default function Dashboard() {
                             ),
                             color: "blue",
                             onConfirm: () => {
-                              window.open(`mailto:${v}`, "_self");
                               setConfirmAction(null);
+                              setSingleEmailTarget(selectedMembre);
+                              setShowMassEmailModal(true);
                             },
                           })
                         }
@@ -1678,7 +1719,7 @@ export default function Dashboard() {
       )}
 
       {showMassEmailModal && (
-        <div className="fixed inset-0 z-[2000] flex items-center justify-center p-4 animate-in fade-in duration-300">
+        <div className="fixed inset-0 z-[2000] flex items-start pt-28 justify-center p-4 animate-in fade-in duration-300">
           <div
             className="absolute inset-0 bg-slate-950/90 backdrop-blur-xl"
             onClick={() => {
@@ -1687,86 +1728,78 @@ export default function Dashboard() {
             }}
           ></div>
 
-          <div className="relative glass bg-[#1e293b] border border-white/10 w-full max-w-lg rounded-[3rem] p-8 shadow-2xl overflow-hidden overflow-y-auto max-h-[90vh]">
+          <div className="relative glass bg-[#1e293b] border border-white/10 w-full max-w-lg rounded-[3rem] p-8 shadow-2xl overflow-hidden overflow-y-auto max-h-[80vh]">
             {/* INTESTAZIONE E FILTRI */}
             <div className="text-center mb-6">
               <h2 className="text-white font-black text-xl uppercase tracking-tighter">
                 Nuova Comunicazione
               </h2>
               <p className="text-blue-400 text-[10px] font-bold uppercase mt-1">
-                Target:{" "}
-                {
-                  membres.filter((m) => {
-                    const s =
-                      filters.stati.length === 0 ||
-                      filters.stati.includes(m.stato?.toUpperCase());
-                    const r =
-                      filters.ruoli.length === 0 ||
-                      filters.ruoli.includes(m.tipologia_socio?.toUpperCase());
-                    return s && r;
-                  }).length
-                }{" "}
-                Membri Selezionati
+                {singleEmailTarget
+                  ? `Destinatario: ${singleEmailTarget.nome} ${singleEmailTarget.cognome}`
+                  : `Target: ${membriTarget.length} Membri Selezionati`}
               </p>
             </div>
+            {/* FILTRI (Cachés si on est en mode "Single Email") */}
+            {!singleEmailTarget && (
+              <div className="space-y-4 mb-6">
+                <div>
+                  <label className="text-[9px] font-black text-slate-500 uppercase ml-2 mb-1 block">
+                    Filtra per Stato
+                  </label>
+                  <div className="flex flex-nowrap w-full gap-1.5">
+                    {["ATTIVO", "INATTIVO", "SOSPESO", "ESCLUSO"].map((s) => (
+                      <button
+                        key={s}
+                        onClick={() =>
+                          setFilters({
+                            ...filters,
+                            stati: filters.stati.includes(s)
+                              ? filters.stati.filter((i) => i !== s)
+                              : [...filters.stati, s],
+                          })
+                        }
+                        className={`flex-1 px-1 py-1.5 rounded-xl text-[8px] font-black transition-all border truncate ${
+                          filters.stati.includes(s)
+                            ? "bg-blue-600 border-blue-500 text-white"
+                            : "bg-white/5 border-white/10 text-slate-400"
+                        }`}
+                      >
+                        {s}
+                      </button>
+                    ))}
+                  </div>
+                </div>
 
-            <div className="space-y-4 mb-6">
-              <div>
-                <label className="text-[9px] font-black text-slate-500 uppercase ml-2 mb-1 block">
-                  Filtra per Stato
-                </label>
-                <div className="flex flex-wrap gap-1.5">
-                  {["ATTIVO", "INATTIVO", "SOSPESO", "ESCLUSO"].map((s) => (
-                    <button
-                      key={s}
-                      onClick={() =>
-                        setFilters({
-                          ...filters,
-                          stati: filters.stati.includes(s)
-                            ? filters.stati.filter((i) => i !== s)
-                            : [...filters.stati, s],
-                        })
-                      }
-                      className={`px-3 py-1.5 rounded-xl text-[9px] font-black transition-all border ${
-                        filters.stati.includes(s)
-                          ? "bg-blue-600 border-blue-500 text-white"
-                          : "bg-white/5 border-white/10 text-slate-400"
-                      }`}
-                    >
-                      {s}
-                    </button>
-                  ))}
+                <div>
+                  <label className="text-[9px] font-black text-slate-500 uppercase ml-2 mb-1 block">
+                    Filtra per Ruolo
+                  </label>
+                  <div className="flex flex-nowrap w-full gap-1.5">
+                    {["PASSIVO", "VOLONTARIO", "STAFF", "ADMIN"].map((r) => (
+                      <button
+                        key={r}
+                        onClick={() =>
+                          setFilters({
+                            ...filters,
+                            ruoli: filters.ruoli.includes(r)
+                              ? filters.ruoli.filter((i) => i !== r)
+                              : [...filters.ruoli, r],
+                          })
+                        }
+                        className={`flex-1 px-1 py-1.5 rounded-xl text-[8px] font-black transition-all border truncate ${
+                          filters.ruoli.includes(r)
+                            ? "bg-emerald-600 border-emerald-500 text-white"
+                            : "bg-white/5 border-white/10 text-slate-400"
+                        }`}
+                      >
+                        {r}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               </div>
-
-              <div>
-                <label className="text-[9px] font-black text-slate-500 uppercase ml-2 mb-1 block">
-                  Filtra per Ruolo
-                </label>
-                <div className="flex flex-wrap gap-1.5">
-                  {["PASSIVO", "VOLONTARIO", "STAFF", "ADMIN"].map((r) => (
-                    <button
-                      key={r}
-                      onClick={() =>
-                        setFilters({
-                          ...filters,
-                          ruoli: filters.ruoli.includes(r)
-                            ? filters.ruoli.filter((i) => i !== r)
-                            : [...filters.ruoli, r],
-                        })
-                      }
-                      className={`px-3 py-1.5 rounded-xl text-[9px] font-black transition-all border ${
-                        filters.ruoli.includes(r)
-                          ? "bg-emerald-600 border-emerald-500 text-white"
-                          : "bg-white/5 border-white/10 text-slate-400"
-                      }`}
-                    >
-                      {r}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </div>
+            )}
 
             {/* 2. DA QUI IN POI CONTINUA IL RESTO DEL TUO FORM (Subject, Message, File) */}
             <div className="space-y-5">
@@ -1790,7 +1823,7 @@ export default function Dashboard() {
               {/* Campo Messaggio */}
               <div>
                 <label className="text-[10px] font-black text-blue-400 uppercase ml-2 mb-2 block">
-                  Messaggio (usa {"{nome}"} per personalizzare)
+                  Messaggio
                 </label>
                 <textarea
                   rows="5"
@@ -1803,83 +1836,90 @@ export default function Dashboard() {
                 ></textarea>
               </div>
 
-              {/* AREA UPLOAD FILE (Sostituisce il vecchio interruttore) */}
-              <div className="space-y-2">
+              {/* AREA UPLOAD MULTI-FILE */}
+              <div className="space-y-3">
                 <label className="text-[10px] font-black text-blue-400 uppercase ml-2 block">
-                  Allega un file
+                  Allega Documenti
                 </label>
+
                 <div className="relative">
+                  {/* L'input est maintenant 'multiple' et utilise handleFileChange */}
                   <input
                     type="file"
                     id="fileUpload"
                     className="hidden"
-                    onChange={(e) => setSelectedFile(e.target.files[0])}
+                    multiple
+                    onChange={handleFileChange}
                   />
+
+                  {/* Bouton pour ajouter */}
                   <label
                     htmlFor="fileUpload"
-                    className={`w-full flex items-center gap-4 p-5 rounded-2xl border-2 border-dashed transition-all cursor-pointer ${
-                      selectedFile
-                        ? "border-emerald-500 bg-emerald-500/10"
-                        : "border-white/10 bg-white/5 hover:border-blue-500/50"
-                    }`}
+                    className="w-full flex items-center justify-center gap-3 p-4 rounded-2xl border-2 border-dashed transition-all cursor-pointer border-white/10 bg-white/5 hover:border-blue-500/50"
                   >
-                    <span className="text-2xl">
-                      {selectedFile ? (
-                        <svg
-                          className="w-8 h-8 text-emerald-400"
-                          fill="none"
-                          stroke="currentColor"
-                          viewBox="0 0 24 24"
-                        >
-                          <path
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            strokeWidth="2"
-                            d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
-                          />
-                        </svg>
-                      ) : (
-                        <svg
-                          className="w-8 h-8 text-slate-400"
-                          fill="none"
-                          stroke="currentColor"
-                          viewBox="0 0 24 24"
-                        >
-                          <path
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            strokeWidth="2"
-                            d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"
-                          />
-                        </svg>
-                      )}
+                    <svg
+                      className="w-5 h-5 text-slate-400"
+                      fill="none"
+                      stroke="currentColor"
+                      viewBox="0 0 24 24"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth="2"
+                        d="M12 4v16m8-8H4"
+                      />
+                    </svg>
+                    <span className="text-[10px] font-black uppercase text-slate-400">
+                      Aggiungi File
                     </span>
-                    <div className="flex flex-col text-left overflow-hidden">
-                      <span
-                        className={`text-[10px] font-black uppercase truncate ${selectedFile ? "text-emerald-400" : "text-slate-400"}`}
-                      >
-                        {selectedFile
-                          ? selectedFile.name
-                          : "Scegli file o scatta foto"}
-                      </span>
-                      <span className="text-[8px] text-slate-500 uppercase tracking-widest">
-                        {selectedFile
-                          ? `${(selectedFile.size / 1024 / 1024).toFixed(2)} MB`
-                          : "PDF, JPG, PNG"}
-                      </span>
-                    </div>
                   </label>
 
-                  {selectedFile && (
-                    <button
-                      onClick={(e) => {
-                        e.preventDefault();
-                        setSelectedFile(null);
-                      }}
-                      className="absolute right-4 top-1/2 -translate-y-1/2 w-8 h-8 bg-red-500/20 text-red-500 rounded-full flex items-center justify-center font-bold"
-                    >
-                      &times;
-                    </button>
+                  {/* LISTE DES FICHIERS SÉLECTIONNÉS */}
+                  {selectedFiles.length > 0 && (
+                    <div className="mt-4 space-y-2 max-h-32 overflow-y-auto pr-1">
+                      {selectedFiles.map((file, index) => (
+                        <div
+                          key={index}
+                          className="flex items-center justify-between bg-slate-800/50 p-3 rounded-xl border border-white/5 group"
+                        >
+                          <div className="flex items-center gap-3 overflow-hidden">
+                            <svg
+                              className="w-5 h-5 text-emerald-400 shrink-0"
+                              fill="none"
+                              stroke="currentColor"
+                              viewBox="0 0 24 24"
+                            >
+                              <path
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                strokeWidth="2"
+                                d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+                              />
+                            </svg>
+                            <div className="flex flex-col text-left truncate">
+                              <span className="text-[10px] font-black uppercase truncate text-emerald-400">
+                                {file.name}
+                              </span>
+                              <span className="text-[8px] text-slate-500 uppercase tracking-widest">
+                                {(file.size / 1024 / 1024).toFixed(2)} MB
+                              </span>
+                            </div>
+                          </div>
+
+                          {/* Bouton Supprimer */}
+                          <button
+                            onClick={(e) => {
+                              e.preventDefault();
+                              removeFile(index);
+                            }}
+                            className="w-6 h-6 bg-red-500/10 text-red-500 rounded-full flex items-center justify-center font-bold shrink-0 hover:bg-red-500 hover:text-white transition-colors"
+                          >
+                            &times;
+                          </button>
+                        </div>
+                      ))}
+                    </div>
                   )}
                 </div>
               </div>
@@ -1889,7 +1929,8 @@ export default function Dashboard() {
                 <button
                   onClick={() => {
                     setShowMassEmailModal(false);
-                    setShowLogModal(true);
+                    if (!singleEmailTarget) setShowLogModal(true);
+                    setSingleEmailTarget(null);
                   }}
                   className="bg-white/5 py-4 rounded-2xl font-black text-slate-500 uppercase text-[10px] tracking-widest border border-white/5"
                 >
@@ -1899,7 +1940,7 @@ export default function Dashboard() {
                   onClick={handleStartMassSending}
                   className="bg-blue-600 py-4 rounded-2xl font-black text-white uppercase text-[10px] tracking-widest shadow-lg shadow-blue-900/40 active:scale-95 transition-all"
                 >
-                  Invia a Tutti
+                  Invia
                 </button>
               </div>
             </div>
