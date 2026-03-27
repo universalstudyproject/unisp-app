@@ -18,6 +18,10 @@ import {
   Radar,
   Legend,
   CartesianGrid,
+  FunnelChart,
+  Funnel,
+  RadialBarChart,
+  RadialBar,
 } from "recharts";
 
 export default function StatsView({
@@ -160,96 +164,65 @@ export default function StatsView({
   // --- 6. LOGICA ASSENZE CRITICHE ---
   const totaleAttivita = dataAffluenza.length;
 
+  // --- CALCUL DYNAMIQUE DES ABSENCES POUR LES ALERTES ---
   const inRischio = useMemo(() => {
-    return membres
-      .filter((m) => {
-        const tipo = m.tipologia_socio?.toUpperCase();
-        return tipo === "VOLONTARIO" || tipo === "PASSIVO";
-      })
+    if (!membres || !passaggi) return [];
+
+    // 1. Détecter les jours d'activité (comme pour le graphique)
+    const giorniDiAttivita = [
+      ...new Set(
+        passaggi.map((p) => {
+          const d = new Date(p.scanned_at);
+          return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+        }),
+      ),
+    ];
+
+    // 2. Calculer les absences de chaque Volontaire et Passivo
+    const stats = membres
+      .filter((m) =>
+        ["VOLONTARIO", "PASSIVO"].includes(m.tipologia_socio?.toUpperCase()),
+      )
       .map((m) => {
-        // 1. Présences réelles du membre
+        const dateIscrizione = m.created_at
+          ? new Date(m.created_at).setHours(0, 0, 0, 0)
+          : 0;
+        const fullName = `${m.nome} ${m.cognome}`.toLowerCase();
+
+        // Ses présences
         const presenze = new Set(
           passaggi
-            .filter((p) => p.nome_cognome === `${m.nome} ${m.cognome}`)
-            .map((p) => new Date(p.scanned_at).toLocaleDateString()),
+            .filter((p) => p.nome_cognome?.toLowerCase() === fullName)
+            .map((p) => {
+              const d = new Date(p.scanned_at);
+              return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+            }),
         ).size;
 
-        // 2. Jours d'activité valides depuis sa date d'inscription
-        const dataIscrizione = m.created_at
-          ? new Date(m.created_at)
-          : new Date(0);
-        dataIscrizione.setHours(0, 0, 0, 0);
-
-        const attivitaValide = dataAffluenza.filter((giorno) => {
-          const [g, mese, a] = giorno.date.split("/");
-          const dateAttivita = new Date(a, mese - 1, g);
-          return dateAttivita >= dataIscrizione;
+        // Les activités valides depuis son inscription
+        const attivitaValide = giorniDiAttivita.filter((dateStr) => {
+          const [anno, mese, giorno] = dateStr.split("-");
+          return (
+            new Date(anno, mese - 1, giorno).setHours(0, 0, 0, 0) >=
+            dateIscrizione
+          );
         }).length;
 
-        // 3. Calcul des absences
+        // Ses absences réelles
         const assenze =
           attivitaValide > presenze ? attivitaValide - presenze : 0;
 
-        // --- ENVOI EMAILS SÉCURISÉ ---
-        if (m.stato?.toUpperCase() === "ATTIVO") {
-          // AVERTISSEMENT (4 absences)
-          if (assenze === 4 && m.avviso_inviato !== true) {
-            supabase
-              .from("membres")
-              .update({ avviso_inviato: true })
-              .eq("id", m.id)
-              .then(() => {
-                fetch("/api/notify-absence", {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({
-                    membreId: m.id,
-                    type: "WARNING",
-                    email: m.email,
-                    nome: m.nome,
-                  }),
-                }).catch((e) => console.error("Errore invio mail avviso", e));
-              })
-              .catch((e) => console.error("Errore aggiornamento DB avviso", e));
-          }
+        // Calcul du pourcentage pour la jauge visuelle (5 absences = barre pleine à 100%)
+        const perc = Math.min((assenze / 5) * 100, 100);
 
-          // SUSPENSION (>= 5 absences)
-          if (assenze >= 5 && m.sospensione_inviata !== true) {
-            supabase
-              .from("membres")
-              .update({ stato: "SOSPESO", sospensione_inviata: true })
-              .eq("id", m.id)
-              .then(() => {
-                fetch("/api/notify-absence", {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({
-                    membreId: m.id,
-                    type: "SUSPENSION",
-                    email: m.email,
-                    nome: m.nome,
-                  }),
-                }).catch((e) =>
-                  console.error("Errore invio mail sospensione", e),
-                );
-              })
-              .catch((e) =>
-                console.error("Errore sospensione automatica DB", e),
-              );
-          }
-        }
+        return { ...m, assenze, perc };
+      });
 
-        return {
-          id: m.id,
-          nome: `${m.nome} ${m.cognome}`,
-          assenze: assenze,
-          perc: attivitaValide > 0 ? (presenze / attivitaValide) * 100 : 0,
-          statoAttuale: m.stato?.toUpperCase(),
-        };
-      })
-      .filter((m) => m.assenze >= 4)
+    // 3. Ne garder que ceux qui ont au moins 1 absence et trier du pire au meilleur
+    return stats
+      .filter((m) => m.assenze >= 3)
       .sort((a, b) => b.assenze - a.assenze);
-  }, [membres, passaggi, dataAffluenza]); // ... tout ton code inRischio ...
+  }, [membres, passaggi]);
 
   return (
     <div className="space-y-10 pb-40 animate-in fade-in duration-700">
@@ -295,13 +268,70 @@ export default function StatsView({
           </div>
         ))}
       </div>
-
+      {/* --- PARTIE 2 : ALERTES CRITIQUES --- */}
+      <div className="space-y-4">
+        <div className="flex justify-between items-center px-2">
+          <h2 className="text-white font-black text-xs uppercase tracking-widest opacity-50 italic">
+            Controllo Frequenza Critica
+          </h2>
+        </div>
+        <div className="glass p-6 rounded-[2.5rem] border border-white/10 bg-red-500/5 space-y-4 shadow-xl">
+          {inRischio.filter((m) => {
+            // Si Staff/Admin : on montre tous les membres en risque
+            if (
+              ["STAFF", "ADMIN"].includes(
+                currentUser?.tipologia_socio?.toUpperCase(),
+              )
+            )
+              return true;
+            // Sinon : on ne montre l'alerte que si c'est l'utilisateur lui-même
+            return m.id === currentUser?.id;
+          }).length === 0 ? (
+            <p className="text-center text-slate-500 text-[10px] font-black uppercase py-6 tracking-widest">
+              Nessuna criticità rilevata
+            </p>
+          ) : (
+            inRischio
+              .filter((m) => {
+                if (
+                  ["STAFF", "ADMIN"].includes(
+                    currentUser?.tipologia_socio?.toUpperCase(),
+                  )
+                )
+                  return true;
+                return m.id === currentUser?.id;
+              })
+              .map((m, i) => (
+                <div key={i} className="space-y-2">
+                  <div className="flex justify-between items-end text-[10px] font-black uppercase">
+                    <span className="text-white">{m.nome}</span>
+                    <span
+                      className={
+                        m.assenze >= 5
+                          ? "text-red-500 animate-pulse"
+                          : "text-yellow-500"
+                      }
+                    >
+                      {m.assenze} ASSENZE
+                    </span>
+                  </div>
+                  <div className="h-1.5 w-full bg-slate-800 rounded-full overflow-hidden">
+                    <div
+                      className={`h-full transition-all duration-1000 ${m.assenze >= 5 ? "bg-red-600 shadow-[0_0_10px_rgba(239,68,68,0.5)]" : "bg-yellow-500"}`}
+                      style={{ width: `${m.perc}%` }}
+                    />
+                  </div>
+                </div>
+              ))
+          )}
+        </div>
+      </div>
       {/* 1. AREA CHART - TREND PRESENZE */}
-      <section className="glass p-6 rounded-[2.5rem] border border-white/10 bg-slate-900/40 shadow-2xl">
+      <section className="glass p-6 rounded-[2.5rem] border border-white/10 h-30 bg-slate-900/40 shadow-2xl">
         <h2 className="text-white font-black text-xs uppercase tracking-widest mb-6 opacity-50 px-2 italic">
           Analisi Flusso Partecipanti
         </h2>
-        <div className="h-64">
+        <div className="h-22">
           <ResponsiveContainer width="100%" height="100%">
             <AreaChart data={dataAffluenza}>
               <defs>
@@ -345,33 +375,68 @@ export default function StatsView({
 
       {/* 2. GRID: STATO (PIE) & TIPOLOGIA (BAR) */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        <div className="glass p-6 rounded-[2.5rem] border border-white/10 bg-white/5 h-80 flex flex-col">
-          <h3 className="text-white text-[10px] font-black uppercase tracking-widest text-center mb-4 opacity-50 text-emerald-400">
-            Stato
+        {/* DESIGN STATO : BARRE HORIZONTALE PROPORTIONNELLE */}
+        <div className="glass p-6 rounded-[2.5rem] border border-white/10 bg-slate-900/60 h-40 flex flex-col justify-center relative overflow-hidden shadow-2xl">
+          <h3 className="text-white text-[10px] font-black uppercase tracking-widest text-center mb-8 opacity-70 text-emerald-400 absolute top-6 left-0 right-0">
+            Stato Attuale
           </h3>
-          <ResponsiveContainer width="100%" height="100%">
-            <PieChart>
-              <Pie
-                data={dataStati}
-                innerRadius={60}
-                outerRadius={80}
-                paddingAngle={8}
-                dataKey="value"
-              >
-                {dataStati.map((entry, index) => (
-                  <Cell key={index} fill={entry.color} />
-                ))}
-              </Pie>
-              <Tooltip />
-              <Legend
-                iconType="circle"
-                wrapperStyle={{ fontSize: "10px", fontWeight: "bold" }}
-              />
-            </PieChart>
-          </ResponsiveContainer>
+
+          <div className="w-full px-2">
+            {/* La Barre Horizontale Stylée */}
+            <div className="w-full h-14 flex rounded-2xl overflow-hidden shadow-inner bg-slate-800/50 border border-white/5">
+              {(() => {
+                const total = dataStati.reduce(
+                  (acc, curr) => acc + curr.value,
+                  0,
+                );
+
+                return dataStati.map((status, index) => {
+                  const perc = total > 0 ? (status.value / total) * 100 : 0;
+
+                  return (
+                    <div
+                      key={index}
+                      style={{
+                        width: `${perc}%`,
+                        backgroundColor: status.color,
+                      }}
+                      className="h-full flex items-center justify-center transition-all duration-1000 group relative hover:opacity-90 cursor-default"
+                    >
+                      {/* Tooltip (Info-bulle) au survol */}
+                      <div className="absolute -top-12 opacity-0 group-hover:opacity-100 transition-opacity bg-slate-800 text-white text-xs font-bold py-1.5 px-3 rounded-xl border border-white/10 whitespace-nowrap z-10 shadow-xl pointer-events-none">
+                        {status.name}: {status.value} ({Math.round(perc)}%)
+                      </div>
+
+                      {/* Affichage du nombre dans la barre si l'espace est suffisant */}
+                      {perc > 10 && (
+                        <span className="text-white font-black text-[11px] drop-shadow-md">
+                          {status.value}
+                        </span>
+                      )}
+                    </div>
+                  );
+                });
+              })()}
+            </div>
+
+            {/* Légende épurée en dessous */}
+            <div className="flex justify-center flex-wrap gap-5 mt-10">
+              {dataStati.map((item, i) => (
+                <div key={i} className="flex items-center gap-2">
+                  <div
+                    className="w-3 h-3 rounded-md shadow-sm"
+                    style={{ backgroundColor: item.color }}
+                  />
+                  <span className="text-[10px] text-slate-300 font-bold uppercase tracking-wider">
+                    {item.name}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
         </div>
 
-        <div className="glass p-6 rounded-[2.5rem] border border-white/10 bg-white/5 h-80 flex flex-col text-center">
+        <div className="glass p-6 rounded-[2.5rem] border border-white/10 bg-white/5 h-40 flex flex-col text-center">
           <h3 className="text-white text-[10px] font-black uppercase tracking-widest text-center mb-4 opacity-50 text-blue-400">
             Distribuzione Ruoli
           </h3>
@@ -382,15 +447,15 @@ export default function StatsView({
                 dataKey="name"
                 type="category"
                 stroke="#94a3b8"
-                fontSize={10}
+                fontSize={7}
                 width={80}
               />
               <Tooltip cursor={{ fill: "transparent" }} />
               <Bar
                 dataKey="value"
                 fill="#3b82f6"
-                radius={[0, 10, 10, 0]}
-                barSize={20}
+                radius={[0, 5, 5, 0]}
+                barSize={10}
               />
             </BarChart>
           </ResponsiveContainer>
@@ -458,30 +523,107 @@ export default function StatsView({
         </div>
       </div>
 
-      {/* 3. GRID: STUDENTI (DONUT) & ALIMENTI (RADAR) */}
+      {/* 3. GRID: STUDENTI (RADIAL NEON) & ALIMENTI (RADAR) */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        <div className="glass p-6 rounded-[2.5rem] border border-white/10 bg-white/5 h-80 flex flex-col">
-          <h3 className="text-white text-[10px] font-black uppercase tracking-widest text-center mb-4 opacity-50 text-purple-400">
+        {/* NOUVEAU DESIGN : JAUGE CIRCULAIRE NEON */}
+        <div className="glass p-6 rounded-[2.5rem] border border-white/10 bg-slate-900/60 h-80 flex flex-col relative overflow-hidden shadow-2xl">
+          <h3 className="text-white text-[10px] font-black uppercase tracking-widest text-center mb-2 opacity-70 text-purple-400">
             Studente?
           </h3>
-          <ResponsiveContainer width="100%" height="100%">
-            <PieChart>
-              <Pie
-                data={dataStudenti}
-                innerRadius={0}
-                outerRadius={70}
-                dataKey="value"
+
+          <div className="flex-1 relative w-full h-full">
+            <ResponsiveContainer width="100%" height="100%">
+              <RadialBarChart
+                cx="50%"
+                cy="50%"
+                innerRadius="60%"
+                outerRadius="100%"
+                barSize={14}
+                /* On inverse les données pour avoir "Studenti" sur l'anneau extérieur */
+                data={[...dataStudenti].reverse()}
+                startAngle={90}
+                endAngle={-270}
               >
-                {dataStudenti.map((entry, index) => (
-                  <Cell key={index} fill={entry.color} />
-                ))}
-              </Pie>
-              <Tooltip />
-              <Legend wrapperStyle={{ fontSize: "10px" }} />
-            </PieChart>
-          </ResponsiveContainer>
+                {/* L'axe caché permet de calculer les proportions par rapport au total */}
+                <PolarAngleAxis
+                  type="number"
+                  domain={[
+                    0,
+                    dataStudenti.reduce((acc, curr) => acc + curr.value, 0),
+                  ]}
+                  angleAxisId={0}
+                  tick={false}
+                />
+                <RadialBar
+                  minAngle={15}
+                  background={{ fill: "#ffffff0a" }}
+                  clockWise
+                  dataKey="value"
+                  cornerRadius={10}
+                >
+                  {[...dataStudenti].reverse().map((entry, index) => (
+                    <Cell key={`cell-${index}`} fill={entry.color} />
+                  ))}
+                </RadialBar>
+                <Tooltip
+                  cursor={{ fill: "transparent" }}
+                  contentStyle={{
+                    borderRadius: "16px",
+                    backgroundColor: "#0f172a",
+                    border: "1px solid #ffffff10",
+                    fontSize: "12px",
+                    fontWeight: "bold",
+                    color: "#fff",
+                  }}
+                  itemStyle={{ color: "#fff" }}
+                />
+              </RadialBarChart>
+            </ResponsiveContainer>
+
+            {/* Pourcentage central absolu */}
+            <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none pb-2">
+              {(() => {
+                const studenti =
+                  dataStudenti.find((d) => d.name === "Studenti")?.value || 0;
+                const total = dataStudenti.reduce(
+                  (acc, curr) => acc + curr.value,
+                  0,
+                );
+                const perc =
+                  total > 0 ? Math.round((studenti / total) * 100) : 0;
+                return (
+                  <>
+                    <span className="text-4xl text-purple-400 font-black">
+                      {perc}%
+                    </span>
+                    <span className="text-[9px] text-white font-bold tracking-widest uppercase opacity-80 mt-1">
+                      Studenti
+                    </span>
+                  </>
+                );
+              })()}
+            </div>
+          </div>
+
+          {/* Légende personnalisée épurée */}
+          <div className="flex justify-center flex-wrap gap-4 mt-2">
+            {dataStudenti.map((item, i) => (
+              <div key={i} className="flex items-center gap-2">
+                <div
+                  className="w-3 h-3 rounded-full border-2 border-slate-900/50"
+                  style={{
+                    backgroundColor: item.color,
+                  }}
+                />
+                <span className="text-[10px] text-slate-300 font-bold uppercase tracking-wider">
+                  {item.name}
+                </span>
+              </div>
+            ))}
+          </div>
         </div>
 
+        {/* VARIETÀ ALIMENTI : INTACT COMME DEMANDÉ */}
         <div className="glass p-6 rounded-[2.5rem] border border-white/10 bg-white/5 h-80 flex flex-col">
           <h3 className="text-white text-[10px] font-black uppercase tracking-widest text-center mb-4 opacity-50 text-cyan-400">
             Varietà Alimenti (Frequenza)
@@ -501,8 +643,8 @@ export default function StatsView({
               <Radar
                 name="Ricorrenza"
                 dataKey="freq"
-                stroke="#8b5cf6"
-                fill="#8b5cf6"
+                stroke="#f6b65c"
+                fill="#f6c05c"
                 fillOpacity={0.6}
               />
               <Tooltip />
@@ -524,30 +666,86 @@ export default function StatsView({
                 : "La Mia Frequenza"}
             </h2>
           </div>
-          <div className="glass p-6 rounded-[2.5rem] border border-white/10 bg-slate-900/40 space-y-4 shadow-xl h-80">
-            <ResponsiveContainer width="100%" height="100%">
+          <div className="glass p-6 rounded-[2.5rem] border border-white/10 bg-slate-900/40 space-y-4 shadow-xl h-35">
+            <ResponsiveContainer width="100%" height="150%">
               <BarChart
-                data={membres
-                  .filter((m) => {
-                    // Filtrage selon le rôle
-                    if (
-                      ["STAFF", "ADMIN"].includes(
-                        currentUser?.tipologia_socio?.toUpperCase(),
-                      )
-                    ) {
-                      return ["PASSIVO", "VOLONTARIO"].includes(
+                data={(() => {
+                  const giorniDiAttivita = [
+                    ...new Set(
+                      passaggi.map((p) => {
+                        const d = new Date(p.scanned_at);
+                        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+                      }),
+                    ),
+                  ].sort();
+
+                  const isStaffOrAdmin = ["STAFF", "ADMIN"].includes(
+                    currentUser?.tipologia_socio?.toUpperCase(),
+                  );
+
+                  let membriDaMostrare = [];
+                  if (isStaffOrAdmin) {
+                    membriDaMostrare = membres.filter((m) =>
+                      ["VOLONTARIO", "PASSIVO"].includes(
                         m.tipologia_socio?.toUpperCase(),
-                      );
-                    }
-                    return m.id === currentUser?.id;
-                  })
-                  .map((m) => ({
-                    // ICI : On remet le vrai Nom et Prénom
-                    name: `${m.nome} ${m.cognome}`,
-                    Presenze: m.presenze || 0,
-                    Assenze: m.assenze || 0,
-                  }))}
-                margin={{ top: 10, right: 10, left: -20, bottom: 25 }}
+                      ),
+                    );
+                  } else {
+                    const mioProfilo =
+                      membres.find((m) => m.id === currentUser?.id) ||
+                      currentUser;
+                    if (mioProfilo) membriDaMostrare = [mioProfilo];
+                  }
+
+                  return giorniDiAttivita.map((dateStr) => {
+                    const [anno, mese, giorno] = dateStr.split("-");
+                    const dataAttivitaMs = new Date(
+                      anno,
+                      mese - 1,
+                      giorno,
+                    ).setHours(0, 0, 0, 0);
+
+                    const dayData = { date: `${giorno}/${mese}` };
+
+                    membriDaMostrare.forEach((m) => {
+                      const dateIscrizione = m.created_at
+                        ? new Date(m.created_at).setHours(0, 0, 0, 0)
+                        : 0;
+
+                      if (dataAttivitaMs >= dateIscrizione) {
+                        const fullName = `${m.nome} ${m.cognome}`.toLowerCase();
+
+                        const scan = passaggi.find((p) => {
+                          if (p.nome_cognome?.toLowerCase() !== fullName)
+                            return false;
+                          const d = new Date(p.scanned_at);
+                          const pDate = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+                          return pDate === dateStr;
+                        });
+
+                        if (scan) {
+                          const scanTime = new Date(scan.scanned_at);
+                          const timeAsNumber =
+                            scanTime.getHours() + scanTime.getMinutes() / 60;
+
+                          // PRESENCE
+                          dayData[`${m.id}_time`] = timeAsNumber;
+                          dayData[`${m.id}_assente`] = 0; // IMPORTANT: on met 0 d'absence
+                          dayData[`${m.id}_timeStr`] =
+                            `${String(scanTime.getHours()).padStart(2, "0")}:${String(scanTime.getMinutes()).padStart(2, "0")}`;
+                          dayData[`${m.id}_nome`] = m.nome;
+                        } else {
+                          // ABSENCE (On crée une mini-barre de hauteur "0.8")
+                          dayData[`${m.id}_time`] = 0;
+                          dayData[`${m.id}_assente`] = 0.8;
+                          dayData[`${m.id}_nome`] = m.nome;
+                        }
+                      }
+                    });
+                    return dayData;
+                  });
+                })()}
+                margin={{ top: 10, right: 5, left: -10, bottom: 25 }}
               >
                 <CartesianGrid
                   strokeDasharray="3 3"
@@ -556,114 +754,107 @@ export default function StatsView({
                 />
 
                 <XAxis
-                  dataKey="name"
-                  tick={false}
-                  axisLine={false}
+                  dataKey="date"
+                  stroke="#64748b"
+                  fontSize={10}
                   tickLine={false}
+                  axisLine={false}
+                  dy={10}
                 />
 
                 <YAxis
+                  width={60}
+                  domain={[0, 24]}
+                  ticks={[0, 6, 12, 18, 24]}
                   stroke="#64748b"
                   fontSize={10}
                   axisLine={false}
                   tickLine={false}
-                  allowDecimals={false}
-                />
-                <Tooltip
-                  contentStyle={{
-                    backgroundColor: "#1e293b",
-                    borderRadius: "15px",
-                    border: "none",
-                    fontSize: "12px",
-                    fontWeight: "900",
-                    color: "#fff",
+                  tickFormatter={(val) => {
+                    if (val === 0) return "Assente";
+                    return `${val}h`;
                   }}
-                  cursor={{ fill: "#ffffff05" }}
-                />
-                <Legend
-                  wrapperStyle={{
-                    fontSize: "10px",
-                    fontWeight: "bold",
-                    paddingTop: "20px",
-                  }}
-                  iconType="circle"
                 />
 
-                {/* Barre des présences (Verte) */}
-                <Bar
-                  dataKey="Presenze"
-                  fill="#10b981"
-                  radius={[4, 4, 0, 0]}
-                  barSize={12}
+                {/* --- LA MAGIE EST ICI : shared={false} --- */}
+                <Tooltip
+                  shared={false}
+                  cursor={{ fill: "#ffffff05" }}
+                  content={({ active, payload, label }) => {
+                    // On ne lit QUE la barre sur laquelle se trouve la souris (payload[0])
+                    if (active && payload && payload.length) {
+                      const dataPoint = payload[0];
+                      const dataKey = dataPoint.dataKey;
+                      const memberId = dataKey.split("_")[0];
+                      const isAssente = dataKey.includes("_assente");
+
+                      const rowData = dataPoint.payload;
+                      const nome = rowData[`${memberId}_nome`];
+                      const timeStr = rowData[`${memberId}_timeStr`];
+
+                      if (!nome) return null;
+
+                      return (
+                        <div className="bg-slate-900 border border-white/10 p-3 rounded-xl shadow-2xl min-w-[120px]">
+                          <p className="text-white font-black text-xs uppercase mb-2 border-b border-white/10 pb-1">
+                            {label}
+                          </p>
+                          <div
+                            className={`text-[10px] font-bold uppercase tracking-widest flex flex-col gap-1 ${isAssente ? "text-amber-500" : "text-emerald-500"}`}
+                          >
+                            <span>{nome}</span>
+                            <span>
+                              {isAssente ? "ASSENTE" : `Ore: ${timeStr}`}
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    }
+                    return null;
+                  }}
                 />
-                {/* Barre des absences (Orange) */}
-                <Bar
-                  dataKey="Assenze"
-                  fill="#f59e0b"
-                  radius={[4, 4, 0, 0]}
-                  barSize={12}
-                />
+
+                {/* DESSIN DES BARRES ET MINI-BARRES D'ABSENCE */}
+                {(() => {
+                  const isStaffOrAdmin = ["STAFF", "ADMIN"].includes(
+                    currentUser?.tipologia_socio?.toUpperCase(),
+                  );
+                  let membriDaMostrare = [];
+                  if (isStaffOrAdmin) {
+                    membriDaMostrare = membres.filter((m) =>
+                      ["VOLONTARIO", "PASSIVO"].includes(
+                        m.tipologia_socio?.toUpperCase(),
+                      ),
+                    );
+                  } else {
+                    const mioProfilo =
+                      membres.find((m) => m.id === currentUser?.id) ||
+                      currentUser;
+                    if (mioProfilo) membriDaMostrare = [mioProfilo];
+                  }
+
+                  return membriDaMostrare.map((m) => (
+                    <React.Fragment key={m.id}>
+                      {/* stackId = Chaque membre a son propre "couloir" pour ne pas chevaucher les autres */}
+                      <Bar
+                        stackId={`stack_${m.id}`}
+                        dataKey={`${m.id}_time`}
+                        fill="#10b981"
+                        barSize={8}
+                        radius={[4, 4, 0, 0]}
+                      />
+                      <Bar
+                        stackId={`stack_${m.id}`}
+                        dataKey={`${m.id}_assente`}
+                        fill="#f59e0b"
+                        barSize={8}
+                        radius={[4, 4, 0, 0]}
+                      />
+                    </React.Fragment>
+                  ));
+                })()}
               </BarChart>
             </ResponsiveContainer>
-          </div>
-        </div>
-
-        {/* --- PARTIE 2 : ALERTES CRITIQUES --- */}
-        <div className="space-y-4">
-          <div className="flex justify-between items-center px-2">
-            <h2 className="text-white font-black text-xs uppercase tracking-widest opacity-50 italic">
-              Controllo Frequenza Critica
-            </h2>
-          </div>
-          <div className="glass p-6 rounded-[2.5rem] border border-white/10 bg-red-500/5 space-y-4 shadow-xl">
-            {inRischio.filter((m) => {
-              // Si Staff/Admin : on montre tous les membres en risque
-              if (
-                ["STAFF", "ADMIN"].includes(
-                  currentUser?.tipologia_socio?.toUpperCase(),
-                )
-              )
-                return true;
-              // Sinon : on ne montre l'alerte que si c'est l'utilisateur lui-même
-              return m.id === currentUser?.id;
-            }).length === 0 ? (
-              <p className="text-center text-slate-500 text-[10px] font-black uppercase py-6 tracking-widest">
-                Nessuna criticità rilevata
-              </p>
-            ) : (
-              inRischio
-                .filter((m) => {
-                  if (
-                    ["STAFF", "ADMIN"].includes(
-                      currentUser?.tipologia_socio?.toUpperCase(),
-                    )
-                  )
-                    return true;
-                  return m.id === currentUser?.id;
-                })
-                .map((m, i) => (
-                  <div key={i} className="space-y-2">
-                    <div className="flex justify-between items-end text-[10px] font-black uppercase">
-                      <span className="text-white">{m.nome}</span>
-                      <span
-                        className={
-                          m.assenze >= 5
-                            ? "text-red-500 animate-pulse"
-                            : "text-yellow-500"
-                        }
-                      >
-                        {m.assenze} ASSENZE
-                      </span>
-                    </div>
-                    <div className="h-1.5 w-full bg-slate-800 rounded-full overflow-hidden">
-                      <div
-                        className={`h-full transition-all duration-1000 ${m.assenze >= 5 ? "bg-red-600 shadow-[0_0_10px_rgba(239,68,68,0.5)]" : "bg-yellow-500"}`}
-                        style={{ width: `${m.perc}%` }}
-                      />
-                    </div>
-                  </div>
-                ))
-            )}
           </div>
         </div>
       </section>

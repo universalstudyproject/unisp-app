@@ -43,10 +43,10 @@ export default async function handler(req, res) {
         <p style="color: #444; font-size: 16px;">Ciao <strong>${nome}</strong>,</p>
         <p style="color: #444;">Abbiamo registrato <b>4 assenze</b> a tuo nome.</p>
         <p style="color: #854d0e; font-weight: bold;">
-          Attenzione: alla prossima assenza (la quinta), il tuo account verrà sospeso automaticamente.
+          Attenzione: alla prossima assenza (la quinta), il tuo stato verrà SOSPESO automaticamente.
         </p>
         <p style="color: #666; font-size: 13px; margin-top: 20px;">
-          Ti aspettiamo alla prossima attività per mantenere attivo il tuo pass!
+          Ti aspettiamo alla prossima attività !
         </p>
       </div>
     </div>
