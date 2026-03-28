@@ -354,6 +354,10 @@ export default function Dashboard() {
             ),
             bgColor: "bg-emerald-600",
           });
+          await createLog(
+            "EMAIL_CUSTOM_SENT",
+            `Inviate ${counter} email personalizzate. Oggetto: "${emailForm.subject}"`,
+          );
         } catch (err) {
           console.error("Errore:", err);
           setFeedback({
@@ -476,6 +480,10 @@ export default function Dashboard() {
       ),
       bgColor: "bg-emerald-600",
     });
+    await createLog(
+      "GENERATE_CARDS_BATCH",
+      `Generate e inviate ${processati} nuove tessere su ${membriDaProcessare.length} richieste.`,
+    );
 
     fetchMembres(); // Rinfresca la lista per vedere i nuovi URL
   };
@@ -514,9 +522,11 @@ export default function Dashboard() {
           const link = document.createElement("a");
           link.href = url;
           link.download = `LOG_${monthName}.txt`;
-          document.body.appendChild(link);
-          link.click();
-          document.body.removeChild(link);
+
+          await createLog(
+            "EXPORT_LOGS",
+            `Esportati i registri di sicurezza per il mese di ${monthName} ${year}`,
+          );
         }
       }
     } finally {
@@ -655,6 +665,12 @@ export default function Dashboard() {
           ),
           bgColor: "bg-emerald-600",
         });
+        await createLog(
+          "GENERATE_CARD_SINGLE",
+          "Tessera generata e inviata via email",
+          member.id,
+          `${member.nome} ${member.cognome}`,
+        );
         fetchMembres(); // Rinfresca i dati per vedere il link in "TESSERA URL"
       } else {
         throw new Error(data.message);
@@ -1545,15 +1561,31 @@ export default function Dashboard() {
                   ].includes(k)
                 )
                   return null;
+
                 const isLink = typeof v === "string" && v.startsWith("http");
+
+                // 1. NUOVA LOGICA: Controllo se il campo è tra quelli modificabili e se l'utente è ADMIN
+                const isEditableByAdmin =
+                  isAdmin &&
+                  ["email", "telefono", "matricola", "nome_corso"].includes(k);
+
                 return (
                   <div
                     key={k}
                     className="bg-white/5 p-4 rounded-2xl border border-white/5"
                   >
-                    <p className="text-[9px] uppercase text-blue-400 font-black mb-1">
-                      {k.replace(/_/g, " ")}
-                    </p>
+                    <div className="flex justify-between items-center mb-1">
+                      <p className="text-[9px] uppercase text-blue-400 font-black">
+                        {k.replace(/_/g, " ")}
+                      </p>
+                      {/* 2. Mostriamo una piccola etichetta visiva per l'admin */}
+                      {isEditableByAdmin && (
+                        <span className="text-[7px] text-slate-500 uppercase font-bold tracking-widest">
+                          Modificabile
+                        </span>
+                      )}
+                    </div>
+
                     {k === "tipologia_socio" ? (
                       <select
                         value={v || ""}
@@ -1594,6 +1626,23 @@ export default function Dashboard() {
                           ),
                         )}
                       </select>
+                    ) : isEditableByAdmin ? (
+                      /* 3. INPUT MODIFICABILE PER L'ADMIN (Salva quando si clicca fuori "onBlur") */
+                      <input
+                        type="text"
+                        defaultValue={v || ""}
+                        onBlur={(e) => {
+                          if (e.target.value !== (v || "")) {
+                            updateMembreField(
+                              selectedMembre.id,
+                              k,
+                              e.target.value,
+                            );
+                          }
+                        }}
+                        placeholder={`Inserisci ${k.replace(/_/g, " ")}`}
+                        className="w-full bg-slate-800 text-white text-sm font-bold p-2 rounded-lg outline-none border border-white/10 focus:border-blue-500 transition-colors"
+                      />
                     ) : isLink ? (
                       <a
                         href={v}

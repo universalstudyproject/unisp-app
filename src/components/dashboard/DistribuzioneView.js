@@ -2,7 +2,12 @@ import React, { useState, useEffect } from "react";
 import Papa from "papaparse";
 import { supabase } from "@/lib/supabase"; // <-- IMPORT MAGIQUE DU CLOUD
 
-export default function DistribuzioneView({ prenotazioni, user, membres }) {
+export default function DistribuzioneView({
+  prenotazioni,
+  user,
+  membres,
+  createLog,
+}) {
   const [alimentiLocali, setAlimentiLocali] = useState([]);
   const [isUploading, setIsUploading] = useState(false);
   const [isLoadingCloud, setIsLoadingCloud] = useState(true); // Pour le petit effet de chargement au début
@@ -66,15 +71,20 @@ export default function DistribuzioneView({ prenotazioni, user, membres }) {
   };
 
   const updateDelegheCloud = async (val) => {
-    setNumeroDeleghe(val);
     const startOfDay = new Date();
     startOfDay.setHours(0, 0, 0, 0);
 
     // Met à jour la valeur dans la base de données pour aujourd'hui
-    await supabase
+    const { error } = await supabase
       .from("alimenti")
       .update({ deleghe: val })
       .gte("created_at", startOfDay.toISOString());
+
+    if (error) {
+      console.error("Erreur de sauvegarde des deleghe:", error);
+    } else if (createLog) {
+      await createLog("UPDATE_DELEGHE", `Numero deleghe aggiornato a: ${val}`);
+    }
   };
 
   // Au chargement de l'onglet, on vérifie le cloud
@@ -156,6 +166,12 @@ export default function DistribuzioneView({ prenotazioni, user, membres }) {
             });
 
             if (res.ok) {
+              if (createLog) {
+                await createLog(
+                  "IMPORT_ALIMENTI",
+                  `Importato file inventario: ${file.name}`,
+                );
+              }
               // Si réussi, on recharge la liste depuis le CLOUD (pour que tout le monde soit synchro)
               await fetchAlimentiOggi();
             }
@@ -184,6 +200,12 @@ export default function DistribuzioneView({ prenotazioni, user, membres }) {
         .delete()
         .gte("created_at", startOfDay.toISOString());
 
+      if (createLog) {
+        await createLog(
+          "DELETE_ALIMENTI",
+          `Cancellato l'inventario alimenti odierno`,
+        );
+      }
       // On vide l'écran
       setAlimentiLocali([]);
     } catch (error) {
@@ -264,7 +286,7 @@ export default function DistribuzioneView({ prenotazioni, user, membres }) {
             </svg>
           </div>
           <h2 className="text-white font-black text-xl uppercase tracking-tighter mb-2">
-            Import CSV Alimenti
+            Import Alimenti
           </h2>
           <p className="text-slate-400 text-[10px] uppercase font-bold tracking-widest mb-6">
             Persone attuali:{" "}
@@ -278,7 +300,7 @@ export default function DistribuzioneView({ prenotazioni, user, membres }) {
             <label
               className={`w-full max-w-xs cursor-pointer ${isUploading ? "bg-slate-800" : "bg-blue-600 hover:bg-blue-500 shadow-lg shadow-blue-600/30"} text-white py-4 px-8 rounded-2xl font-black text-[10px] uppercase tracking-widest transition-all inline-block active:scale-95`}
             >
-              {isUploading ? "Elaborazione in corso..." : "Carica CSV Alimenti"}
+              {isUploading ? "Elaborazione in corso..." : "Carica il file CSV"}
               <input
                 type="file"
                 accept=".csv"
@@ -310,6 +332,9 @@ export default function DistribuzioneView({ prenotazioni, user, membres }) {
                 min="0"
                 value={numeroDeleghe}
                 onChange={(e) =>
+                  setNumeroDeleghe(Math.max(0, parseInt(e.target.value) || 0))
+                }
+                onBlur={(e) =>
                   updateDelegheCloud(Math.max(0, parseInt(e.target.value) || 0))
                 }
                 className="w-14 h-7 bg-slate-900/50 border border-white/10 rounded-lg text-center text-white text-[10px] font-black outline-none focus:border-blue-500 transition-all"

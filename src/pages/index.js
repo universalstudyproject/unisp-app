@@ -68,6 +68,7 @@ export default function Login() {
         throw new Error("Credenziali non valide");
       }
 
+      // Se arriva qui, IL LOGIN E' VALIDO
       // LOG SUCCESSO
       await createLog(
         "LOGIN_SUCCESS",
@@ -76,13 +77,16 @@ export default function Login() {
         `Accesso effettuato correttamente (${data.tipologia_socio})`,
       );
 
+      // Salvataggio sessione e reindirizzamento
       localStorage.setItem("unisp_user", JSON.stringify(data));
       router.replace("/dashboard");
     } catch (err) {
       setError(err.message);
       setIsShaking(true);
-      setLoading(false);
       setTimeout(() => setIsShaking(false), 500);
+    } finally {
+      // Imposta sempre loading a false, sia in caso di successo che di errore
+      setLoading(false);
     }
   };
 
