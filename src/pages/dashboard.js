@@ -14,6 +14,10 @@ import DistribuzioneView from "@/components/dashboard/DistribuzioneView";
 export default function Dashboard() {
   const router = useRouter();
   const [mounted, setMounted] = useState(false);
+  const [showTipoMenu, setShowTipoMenu] = useState(false);
+  const [showDatePicker, setShowDatePicker] = useState(false);
+  const [showTimePicker, setShowTimePicker] = useState(false);
+  const [calendarView, setCalendarView] = useState(new Date());
   const [prenotazioni, setPrenotazioni] = useState([]);
   const [membres, setMembres] = useState([]);
   const [singleEmailTarget, setSingleEmailTarget] = useState(null);
@@ -31,12 +35,6 @@ export default function Dashboard() {
   const [confirmAction, setConfirmAction] = useState(null);
   const [selectedFiles, setSelectedFiles] = useState([]);
 
-  const [showMassEmailModal, setShowMassEmailModal] = useState(false);
-  const [emailForm, setEmailForm] = useState({
-    subject: "",
-    message: "",
-  });
-
   const [filters, setFilters] = useState({
     stati: [],
     ruoli: [],
@@ -45,6 +43,69 @@ export default function Dashboard() {
   // STATI PER I LOG
   const [showLogModal, setShowLogModal] = useState(false);
   const [selectedMonths, setSelectedMonths] = useState([new Date().getMonth()]);
+  const [showLogsExportModal, setShowLogsExportModal] = useState(false);
+
+  // --- HELPER DE SAUVEGARDE LOCALE ---
+  const loadSavedState = (key, defaultValue) => {
+    if (typeof window !== "undefined") {
+      const saved = localStorage.getItem(key);
+      if (saved) {
+        try {
+          return JSON.parse(saved);
+        } catch (e) {
+          return defaultValue;
+        }
+      }
+    }
+    return defaultValue;
+  };
+
+  // --- VARIABLES AVEC MÉMOIRE PERSISTANTE ---
+  const [showMassEmailModal, setShowMassEmailModal] = useState(() =>
+    loadSavedState("unisp_showMassEmailModal", false),
+  );
+
+  const [emailForm, setEmailForm] = useState(() =>
+    loadSavedState("unisp_emailForm", { subject: "", message: "" }),
+  );
+
+  const [showAttivitaModal, setShowAttivitaModal] = useState(() =>
+    loadSavedState("unisp_showAttivitaModal", false),
+  );
+
+  const [attivitaForm, setAttivitaForm] = useState(() =>
+    loadSavedState("unisp_attivitaForm", {
+      tipo: "DISTRIBUZIONE",
+      tipoCustom: "",
+      data: new Date().toISOString().split("T")[0],
+      ora: new Date().toTimeString().substring(0, 5),
+      luogo: "Darsena (via Darsena 81/A)",
+      note: "",
+    }),
+  );
+
+  // --- SYNCHRONISATION EN TEMPS RÉEL ---
+  useEffect(() => {
+    localStorage.setItem(
+      "unisp_showAttivitaModal",
+      JSON.stringify(showAttivitaModal),
+    );
+  }, [showAttivitaModal]);
+
+  useEffect(() => {
+    localStorage.setItem("unisp_attivitaForm", JSON.stringify(attivitaForm));
+  }, [attivitaForm]);
+
+  useEffect(() => {
+    localStorage.setItem(
+      "unisp_showMassEmailModal",
+      JSON.stringify(showMassEmailModal),
+    );
+  }, [showMassEmailModal]);
+
+  useEffect(() => {
+    localStorage.setItem("unisp_emailForm", JSON.stringify(emailForm));
+  }, [emailForm]);
 
   const [searchTerm, setSearchTerm] = useState("");
   const [filter, setFilter] = useState("ALL");
@@ -385,6 +446,7 @@ export default function Dashboard() {
           setSelectedFiles([]);
           setFilters({ stati: [], ruoli: [] });
           setSingleEmailTarget(null);
+          setEmailForm({ subject: "", message: "" });
         }
       },
     });
@@ -1050,7 +1112,9 @@ export default function Dashboard() {
         showExitModal ||
         scanning ||
         feedback ||
-        showMassEmailModal
+        showMassEmailModal ||
+        showLogsExportModal ||
+        showAttivitaModal
       ) {
         e.preventDefault();
 
@@ -1189,39 +1253,131 @@ export default function Dashboard() {
     return matchStato && matchRuolo;
   });
 
+  const handleAvviaAttivita = async () => {
+    setIsProcessing(true);
+    try {
+      // Si "ALTRO" est sélectionné, on utilise la valeur tapée à la main
+      const finalTipo =
+        attivitaForm.tipo === "ALTRO"
+          ? attivitaForm.tipoCustom.toUpperCase()
+          : attivitaForm.tipo;
+
+      // 1. Sauvegarde dans la DB
+      const { data, error } = await supabase
+        .from("attivita")
+        .insert([
+          {
+            tipo: finalTipo,
+            data_attivita: attivitaForm.data,
+            ora_attivita: attivitaForm.ora,
+            luogo: attivitaForm.luogo, // <-- AJOUT DU LIEU ICI
+            note: attivitaForm.note,
+            stato: "APERTA",
+          },
+        ])
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      // 2. Log de l'action
+      await createLog(
+        "AVVIA_ATTIVITA",
+        `Avviata nuova attività: ${finalTipo} presso ${attivitaForm.luogo}`, // <-- AJOUT DU LIEU AU LOG
+      );
+
+      // 3. Ferme le modal d'activité et prépare l'email
+      setShowAttivitaModal(false);
+      setEmailForm({
+        subject: `Nuova ${finalTipo} in programma`,
+        message: `Vi informiamo che l'attività di ${finalTipo.toLowerCase()} si terrà il ${attivitaForm.data.split("-").reverse().join("/")} alle ore ${attivitaForm.ora}, presso ${attivitaForm.luogo}.\n\nEventuali deleghe devono essere inviate entro le ore 12:00 del giorno stesso all’indirizzo: unisp.spesa@gmail.com\n\nInvitiamo chi deve prendere treno/bus o andare a lavoro a presentarsi in anticipo per ricevere i primi numeri.\n\nDurante l'attività, chiediamo la collaborazione di tutti per scaricare i prodotti dal furgone e sistemare i cartoni negli appositi contenitori.\n\n${
+          attivitaForm.note ? `${attivitaForm.note}\n\n` : ""
+        }Grazie a ciascuno per il supporto \n\nUNISP – Ferrara`,
+      });
+
+      // 4. Ouvre le modal d'envoi d'email
+      setShowMassEmailModal(true);
+
+      // Reset du formulaire
+      setAttivitaForm({
+        tipo: "DISTRIBUZIONE",
+        tipoCustom: "",
+        data: new Date().toISOString().split("T")[0],
+        ora: new Date().toTimeString().substring(0, 5),
+        luogo: "Darsena (via Darsena 81/A)",
+        note: "",
+      });
+    } catch (err) {
+      console.error(err);
+      setModalAlert({
+        title: "ERRORE",
+        message: "Impossibile avviare l'attività. Riprova.",
+        icon: (
+          <svg
+            className="w-10 h-10 mx-auto mb-4 text-red-400 drop-shadow-[0_0_20px_rgba(248,113,113,0.7)]"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth="1.5"
+              d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
+            />
+          </svg>
+        ),
+      });
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
   // QUI INIZIA LA UI
   return (
     <Layout
       onLogoutClick={() => setShowExitModal(true)}
       onAdminClick={() => {
         setShowLogModal(true);
-        setShowMassEmailModal(false); // Ferme le mail
-        setSingleEmailTarget(null); // Oublie le destinataire
+        setShowMassEmailModal(false);
+        setSingleEmailTarget(null);
         setSelectedMembre(null);
         setConfirmAction(null);
+        setShowAttivitaModal(false);
+        setShowLogsExportModal(false);
       }}
       onMembriClick={() => {
         setActiveTab("membres");
-        setShowMassEmailModal(false); // Ferme le mail
-        setSingleEmailTarget(null); // Oublie le destinataire
+        setShowMassEmailModal(false);
+        setSingleEmailTarget(null);
         setShowLogModal(false);
         setConfirmAction(null);
         setSelectedMembre(null);
+        setShowAttivitaModal(false);
+        setShowLogsExportModal(false);
       }}
       onStatsClick={() => {
         setActiveTab("stats");
         setShowLogModal(false);
         setSelectedMembre(null);
-        setShowMassEmailModal(false); // Ferme le mail
-        setSingleEmailTarget(null); // Oublie le destinataire
+        setShowMassEmailModal(false);
+        setSingleEmailTarget(null);
         setConfirmAction(null);
+        setShowAttivitaModal(false);
+        setShowLogsExportModal(false);
       }}
     >
       <div className="space-y-6">
         <nav className="bg-slate-900/90 border border-white/10 backdrop-blur-xl h-14 rounded-full px-2 flex items-center shadow-2xl sticky top-2 z-[90]">
           {/* LOGO DEVIENT LE BOUTON DASHBOARD */}
           <button
-            onClick={() => setActiveTab("dashboard")}
+            onClick={() => {
+              setActiveTab("dashboard");
+              setShowAttivitaModal(false);
+              setShowMassEmailModal(false);
+              setShowLogModal(false);
+              setShowLogsExportModal(false);
+            }}
             className={`w-10 h-10 rounded-full bg-white flex items-center justify-center ml-1 flex-shrink-0 shadow-lg p-0.5 overflow-hidden transition-all active:scale-90 ${activeTab === "dashboard" ? "ring-2 ring-blue-500" : ""}`}
           >
             <Image
@@ -1308,7 +1464,7 @@ export default function Dashboard() {
         </button>
       )}
 
-      {/* MODALE PANNELLO ADMIN */}
+      {/* MODALE PANNELLO ADMIN PRINCIPALE */}
       {showLogModal && (
         <div className="fixed inset-0 z-[1000] flex items-start pt-28 justify-center p-6 animate-in fade-in duration-300">
           <div
@@ -1320,8 +1476,7 @@ export default function Dashboard() {
               Pannello Admin
             </h2>
 
-            {/* SEZIONE AZIONI RAPIDE */}
-            <div className="flex flex-col gap-3 mb-10">
+            <div className="flex flex-col gap-3 mb-8">
               <button
                 onClick={() => {
                   setShowLogModal(false);
@@ -1391,62 +1546,530 @@ export default function Dashboard() {
               </button>
             </div>
 
-            {/* SEZIONE LOG REGISTRI */}
-            <div className="border-t border-white/5 pt-6">
-              <p className="text-slate-500 font-bold text-[9px] uppercase text-center mb-4 tracking-widest">
-                Esporta logs
-              </p>
+            <div className="flex flex-col gap-3 pt-6 border-t border-white/5">
+              <button
+                onClick={() => {
+                  setShowLogModal(false);
+                  setShowAttivitaModal(true);
+                }}
+                className="w-full bg-amber-500/10 border border-amber-500/30 py-4 rounded-2xl font-black text-amber-400 uppercase text-[10px] tracking-widest active:scale-95 transition-all flex items-center justify-center gap-3"
+              >
+                Gestione Attività
+              </button>
 
-              <div className="grid grid-cols-3 gap-2 mb-6">
-                {monthsList.map((month, idx) => (
-                  <button
-                    key={idx}
-                    onClick={() => toggleMonth(idx)}
-                    className={`py-2 rounded-xl text-[9px] font-bold border transition-all ${
-                      selectedMonths.includes(idx)
-                        ? "bg-emerald-600/20 border-emerald-500 text-emerald-400"
-                        : "bg-white/5 border-white/10 text-slate-500"
-                    }`}
-                  >
-                    {month.substring(0, 3)}
-                  </button>
-                ))}
-              </div>
+              <button
+                onClick={() => {
+                  setShowLogModal(false);
+                  setShowLogsExportModal(true);
+                }}
+                className="w-full bg-emerald-500/10 border border-emerald-500/30 py-4 rounded-2xl font-black text-emerald-400 uppercase text-[10px] tracking-widest active:scale-95 transition-all flex items-center justify-center gap-3"
+              >
+                Gestione Logs
+              </button>
 
-              <div className="flex flex-col gap-3">
+              <button
+                onClick={() => setShowLogModal(false)}
+                className="w-full bg-white/5 py-4 mt-2 rounded-2xl font-black text-slate-400 uppercase text-[10px] border border-white/10 active:scale-95 transition-all"
+              >
+                Chiudi
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODALE GESTIONE ATTIVITÀ */}
+      {showAttivitaModal && (
+        <div className="fixed inset-0 z-[1000] flex items-start pt-20 justify-center p-6 animate-in fade-in duration-300 overflow-y-auto">
+          <div
+            className="absolute inset-0 bg-slate-950/90 backdrop-blur-xl min-h-[120%]"
+            onClick={() => setShowAttivitaModal(false)}
+          ></div>
+          <div className="relative glass bg-[#1e293b] border border-white/10 w-full max-w-sm rounded-[3rem] p-8 shadow-2xl my-auto pb-12">
+            <h2 className="text-white font-black text-center uppercase tracking-[0.2em] mb-6 text-sm">
+              Nuova Attività
+            </h2>
+
+            <div className="space-y-4 mb-6">
+              {/* TIPO DI ATTIVITÀ STYLISÉ COME IL MENU PRINCIPALE */}
+              <div className="relative">
+                <label className="text-[10px] font-black text-amber-400 uppercase ml-2 mb-2 block">
+                  Tipo di Attività
+                </label>
                 <button
                   onClick={() => {
-                    if (selectedMonths.length === 0) {
-                      setConfirmAction({
-                        title: "Mese Mancante",
-                        message:
-                          "Seleziona almeno un mese dalla griglia qui sotto per scaricare i log.",
-                        icon: (
-                          <svg
-                            className="w-10 h-10 mx-auto mb-4 text-amber-400 drop-shadow-[0_0_20px_rgba(251,191,36,0.7)]"
-                            fill="none"
-                            stroke="currentColor"
-                            viewBox="0 0 24 24"
-                          >
-                            <path
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                              strokeWidth="1.5"
-                              d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
-                            />
-                          </svg>
-                        ),
-                        color: "amber",
-                        onConfirm: () => setConfirmAction(null),
-                      });
-                      return;
+                    setShowTipoMenu(!showTipoMenu);
+                    setShowDatePicker(false);
+                    setShowTimePicker(false);
+                  }}
+                  className={`w-full flex items-center justify-between gap-3 bg-slate-900 border ${
+                    showTipoMenu
+                      ? "border-amber-500 text-white shadow-[0_0_15px_rgba(245,158,11,0.3)]"
+                      : "border-white/10 text-slate-300 hover:bg-white/5 hover:border-amber-500/50"
+                  } text-sm font-bold rounded-2xl px-5 py-4 transition-all relative z-[200]`}
+                >
+                  <span className="capitalize">
+                    {attivitaForm.tipo.toLowerCase()}
+                  </span>
+                  <svg
+                    className={`w-4 h-4 transition-transform ${showTipoMenu ? "rotate-180 text-amber-400" : "text-slate-500"}`}
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth="3"
+                      d="M19 9l-7 7-7-7"
+                    />
+                  </svg>
+                </button>
+
+                {showTipoMenu && (
+                  <>
+                    <div
+                      className="fixed inset-0 z-[150]"
+                      onClick={() => setShowTipoMenu(false)}
+                    ></div>
+                    <div className="absolute top-full left-0 right-0 mt-2 bg-[#0f172a] border border-slate-700 rounded-2xl shadow-[0_20px_50px_rgba(0,0,0,0.9)] overflow-hidden animate-in fade-in zoom-in-95 slide-in-from-top-2 duration-200 z-[200]">
+                      <div className="p-2 flex flex-col gap-1">
+                        {[
+                          {
+                            val: "DISTRIBUZIONE",
+                            label: "Distribuzione",
+                            icon: "📦",
+                          },
+                          { val: "RIUNIONE", label: "Riunione", icon: "👥" },
+                          {
+                            val: "EVENTO",
+                            label: "Evento Speciale",
+                            icon: "⭐",
+                          },
+                          { val: "ALTRO", label: "Altro...", icon: "✏️" },
+                        ].map((opt, idx) => (
+                          <React.Fragment key={opt.val}>
+                            <button
+                              onClick={() => {
+                                setAttivitaForm({
+                                  ...attivitaForm,
+                                  tipo: opt.val,
+                                });
+                                setShowTipoMenu(false);
+                              }}
+                              className={`w-full text-left px-4 py-3 text-[12px] font-bold rounded-xl transition-colors flex items-center gap-3 ${attivitaForm.tipo === opt.val ? "bg-amber-500/10 text-amber-400" : "text-slate-300 hover:bg-white/5 hover:text-white"}`}
+                            >
+                              <span className="text-base">{opt.icon}</span>
+                              {opt.label}
+                            </button>
+                            {idx === 2 && (
+                              <div className="h-px w-full bg-white/5 my-1" />
+                            )}
+                          </React.Fragment>
+                        ))}
+                      </div>
+                    </div>
+                  </>
+                )}
+              </div>
+
+              {/* INPUT CUSTOM "ALTRO" */}
+              <div
+                className={`overflow-hidden transition-all duration-300 ${attivitaForm.tipo === "ALTRO" ? "max-h-24 opacity-100" : "max-h-0 opacity-0"}`}
+              >
+                <input
+                  type="text"
+                  placeholder="Specifica il tipo..."
+                  value={attivitaForm.tipoCustom}
+                  onChange={(e) =>
+                    setAttivitaForm({
+                      ...attivitaForm,
+                      tipoCustom: e.target.value,
+                    })
+                  }
+                  className="w-full bg-slate-900/50 border border-amber-500/50 rounded-2xl px-5 py-4 text-amber-400 outline-none focus:border-amber-400 transition-all font-bold text-sm"
+                />
+              </div>
+
+              {/* LUOGO (NOUVEAU) */}
+              <div>
+                <label className="text-[10px] font-black text-amber-400 uppercase ml-2 mb-2 block">
+                  Luogo
+                </label>
+                <div className="relative">
+                  <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
+                    <svg
+                      className="w-4 h-4 text-amber-500/50"
+                      fill="none"
+                      stroke="currentColor"
+                      viewBox="0 0 24 24"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth="2"
+                        d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"
+                      />
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth="2"
+                        d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"
+                      />
+                    </svg>
+                  </div>
+                  <input
+                    type="text"
+                    placeholder=""
+                    value={attivitaForm.luogo}
+                    onChange={(e) =>
+                      setAttivitaForm({
+                        ...attivitaForm,
+                        luogo: e.target.value,
+                      })
                     }
+                    className="w-full bg-slate-900/50 border border-white/10 rounded-2xl pl-10 pr-5 py-4 text-white outline-none focus:border-amber-500 transition-all font-bold text-sm"
+                  />
+                </div>
+              </div>
+
+              {/* DATA E ORA CUSTOM PICKERS */}
+              <div className="grid grid-cols-2 gap-3 relative z-[150]">
+                {/* DATA PICKER */}
+                <div className="relative">
+                  <label className="text-[10px] font-black text-amber-400 uppercase ml-2 mb-2 block">
+                    Data
+                  </label>
+                  <button
+                    onClick={() => {
+                      setShowDatePicker(!showDatePicker);
+                      setShowTimePicker(false);
+                      setShowTipoMenu(false);
+                    }}
+                    className={`w-full flex items-center justify-between gap-2 bg-slate-900 border ${showDatePicker ? "border-amber-500 shadow-[0_0_15px_rgba(245,158,11,0.3)] text-white" : "border-white/10 text-slate-300 hover:border-amber-500/50 hover:bg-white/5"} rounded-2xl px-5 py-4 transition-all font-bold text-sm shadow-inner`}
+                  >
+                    <span>
+                      {attivitaForm.data.split("-").reverse().join("/")}
+                    </span>
+                    <svg
+                      className={`w-4 h-4 transition-colors ${showDatePicker ? "text-amber-500" : "text-slate-500"}`}
+                      fill="none"
+                      stroke="currentColor"
+                      viewBox="0 0 24 24"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth="2.5"
+                        d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"
+                      />
+                    </svg>
+                  </button>
+
+                  {/* CALENDRIER POPUP */}
+                  {showDatePicker && (
+                    <>
+                      <div
+                        className="fixed inset-0 z-[150]"
+                        onClick={() => setShowDatePicker(false)}
+                      ></div>
+                      <div className="absolute top-full left-0 mt-2 p-4 w-[260px] bg-[#0f172a] border border-slate-700 rounded-3xl shadow-[0_20px_50px_rgba(0,0,0,0.9)] z-[200] animate-in fade-in zoom-in-95 duration-200">
+                        <div className="flex justify-between items-center mb-4">
+                          <button
+                            onClick={(e) => {
+                              e.preventDefault();
+                              setCalendarView(
+                                new Date(
+                                  calendarView.getFullYear(),
+                                  calendarView.getMonth() - 1,
+                                  1,
+                                ),
+                              );
+                            }}
+                            className="text-slate-400 hover:text-white p-1.5 bg-white/5 hover:bg-white/10 rounded-lg active:scale-90 transition-all"
+                          >
+                            <svg
+                              className="w-4 h-4"
+                              fill="none"
+                              stroke="currentColor"
+                              viewBox="0 0 24 24"
+                            >
+                              <path
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                strokeWidth="3"
+                                d="M15 19l-7-7 7-7"
+                              />
+                            </svg>
+                          </button>
+                          <span className="text-white font-black text-[10px] uppercase tracking-widest">
+                            {calendarView.toLocaleString("it-IT", {
+                              month: "long",
+                              year: "numeric",
+                            })}
+                          </span>
+                          <button
+                            onClick={(e) => {
+                              e.preventDefault();
+                              setCalendarView(
+                                new Date(
+                                  calendarView.getFullYear(),
+                                  calendarView.getMonth() + 1,
+                                  1,
+                                ),
+                              );
+                            }}
+                            className="text-slate-400 hover:text-white p-1.5 bg-white/5 hover:bg-white/10 rounded-lg active:scale-90 transition-all"
+                          >
+                            <svg
+                              className="w-4 h-4"
+                              fill="none"
+                              stroke="currentColor"
+                              viewBox="0 0 24 24"
+                            >
+                              <path
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                strokeWidth="3"
+                                d="M9 5l7 7-7 7"
+                              />
+                            </svg>
+                          </button>
+                        </div>
+                        <div className="grid grid-cols-7 gap-1 text-center mb-2 border-b border-white/5 pb-2">
+                          {["Lu", "Ma", "Me", "Gi", "Ve", "Sa", "Do"].map(
+                            (d) => (
+                              <span
+                                key={d}
+                                className="text-[8px] font-black text-slate-500"
+                              >
+                                {d}
+                              </span>
+                            ),
+                          )}
+                        </div>
+                        <div className="grid grid-cols-7 gap-1 text-center">
+                          {(() => {
+                            const year = calendarView.getFullYear();
+                            const month = calendarView.getMonth();
+                            const daysInMonth = new Date(
+                              year,
+                              month + 1,
+                              0,
+                            ).getDate();
+                            const firstDay = new Date(year, month, 1).getDay();
+                            const startDay = firstDay === 0 ? 6 : firstDay - 1;
+                            const days = Array(startDay)
+                              .fill(null)
+                              .concat(
+                                Array.from(
+                                  { length: daysInMonth },
+                                  (_, i) => i + 1,
+                                ),
+                              );
+                            return days.map((d, i) => {
+                              if (!d) return <div key={`empty-${i}`}></div>;
+                              const dateStr = `${year}-${String(month + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+                              const isSelected = attivitaForm.data === dateStr;
+                              const isToday =
+                                new Date().toISOString().split("T")[0] ===
+                                dateStr;
+                              return (
+                                <button
+                                  key={i}
+                                  onClick={(e) => {
+                                    e.preventDefault();
+                                    setAttivitaForm({
+                                      ...attivitaForm,
+                                      data: dateStr,
+                                    });
+                                    setShowDatePicker(false);
+                                  }}
+                                  className={`w-7 h-7 rounded-full text-[10px] font-black transition-all flex items-center justify-center mx-auto ${isSelected ? "bg-amber-500 text-slate-900 shadow-[0_0_10px_rgba(245,158,11,0.5)] scale-110" : isToday ? "border border-amber-500/50 text-amber-400" : "text-slate-300 hover:bg-white/10 hover:text-white"}`}
+                                >
+                                  {d}
+                                </button>
+                              );
+                            });
+                          })()}
+                        </div>
+                      </div>
+                    </>
+                  )}
+                </div>
+
+                {/* ORA PICKER */}
+                <div className="relative">
+                  <label className="text-[10px] font-black text-amber-400 uppercase ml-2 mb-2 block">
+                    Ora
+                  </label>
+                  <button
+                    onClick={() => {
+                      setShowTimePicker(!showTimePicker);
+                      setShowDatePicker(false);
+                      setShowTipoMenu(false);
+                    }}
+                    className={`w-full flex items-center justify-between gap-2 bg-slate-900 border ${showTimePicker ? "border-amber-500 shadow-[0_0_15px_rgba(245,158,11,0.3)] text-white" : "border-white/10 text-slate-300 hover:border-amber-500/50 hover:bg-white/5"} rounded-2xl px-5 py-4 transition-all font-bold text-sm shadow-inner`}
+                  >
+                    <span>{attivitaForm.ora}</span>
+                    <svg
+                      className={`w-4 h-4 transition-colors ${showTimePicker ? "text-amber-500" : "text-slate-500"}`}
+                      fill="none"
+                      stroke="currentColor"
+                      viewBox="0 0 24 24"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth="2.5"
+                        d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
+                      />
+                    </svg>
+                  </button>
+
+                  {/* HORLOGE POPUP */}
+                  {showTimePicker && (
+                    <>
+                      <div
+                        className="fixed inset-0 z-[150]"
+                        onClick={() => setShowTimePicker(false)}
+                      ></div>
+                      <div className="absolute top-full right-0 mt-2 p-4 w-[220px] bg-[#0f172a] border border-slate-700 rounded-3xl shadow-[0_20px_50px_rgba(0,0,0,0.9)] z-[200] flex gap-3 animate-in fade-in zoom-in-95 duration-200">
+                        <div className="flex-1 h-48 overflow-y-auto pr-1 [&::-webkit-scrollbar]:w-1 [&::-webkit-scrollbar-thumb]:bg-slate-700 [&::-webkit-scrollbar-thumb]:rounded-full scroll-smooth">
+                          <p className="text-[8px] font-black text-slate-500 text-center mb-3 uppercase tracking-widest sticky top-0 bg-[#0f172a] pb-1">
+                            Ore
+                          </p>
+                          {Array.from({ length: 24 }, (_, i) =>
+                            String(i).padStart(2, "0"),
+                          ).map((h) => (
+                            <button
+                              key={`h-${h}`}
+                              onClick={(e) => {
+                                e.preventDefault();
+                                setAttivitaForm({
+                                  ...attivitaForm,
+                                  ora: `${h}:${attivitaForm.ora.split(":")[1] || "00"}`,
+                                });
+                              }}
+                              className={`w-full py-2.5 mb-1.5 rounded-xl text-[12px] font-black transition-all ${attivitaForm.ora.startsWith(h) ? "bg-amber-500 text-slate-900 shadow-md" : "text-slate-400 hover:bg-white/10 hover:text-white"}`}
+                            >
+                              {h}
+                            </button>
+                          ))}
+                        </div>
+                        <div className="flex flex-col justify-center text-slate-600 font-black pb-4 text-xl">
+                          :
+                        </div>
+                        <div className="flex-1 h-48 overflow-y-auto pr-1 [&::-webkit-scrollbar]:w-1 [&::-webkit-scrollbar-thumb]:bg-slate-700 [&::-webkit-scrollbar-thumb]:rounded-full scroll-smooth">
+                          <p className="text-[8px] font-black text-slate-500 text-center mb-3 uppercase tracking-widest sticky top-0 bg-[#0f172a] pb-1">
+                            Min
+                          </p>
+                          {Array.from({ length: 60 }, (_, i) =>
+                            String(i).padStart(2, "0"),
+                          ).map((m) => (
+                            <button
+                              key={`m-${m}`}
+                              onClick={(e) => {
+                                e.preventDefault();
+                                setAttivitaForm({
+                                  ...attivitaForm,
+                                  ora: `${attivitaForm.ora.split(":")[0] || "12"}:${m}`,
+                                });
+                                setShowTimePicker(false);
+                              }}
+                              className={`w-full py-2.5 mb-1.5 rounded-xl text-[12px] font-black transition-all ${attivitaForm.ora.endsWith(`:${m}`) ? "bg-amber-500 text-slate-900 shadow-md" : "text-slate-400 hover:bg-white/10 hover:text-white"}`}
+                            >
+                              {m}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+
+              {/* NOTE */}
+              <div className="pt-2">
+                <label className="text-[10px] font-black text-amber-400 uppercase ml-2 mb-2 block">
+                  Note (Opzionale)
+                </label>
+                <textarea
+                  rows="2"
+                  placeholder="Aggiungi una descrizione o nota..."
+                  value={attivitaForm.note}
+                  onChange={(e) =>
+                    setAttivitaForm({ ...attivitaForm, note: e.target.value })
+                  }
+                  className="w-full bg-slate-900/50 border border-white/10 rounded-2xl px-5 py-4 text-white outline-none focus:border-amber-500 transition-all text-sm"
+                ></textarea>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3 mt-8">
+              <button
+                onClick={() => {
+                  setShowAttivitaModal(false);
+                  setShowLogModal(true);
+                }}
+                className="bg-white/5 py-4 rounded-2xl font-black text-slate-500 uppercase text-[10px] tracking-widest border border-white/5 active:scale-95"
+              >
+                Indietro
+              </button>
+              <button
+                onClick={handleAvviaAttivita}
+                disabled={
+                  attivitaForm.tipo === "ALTRO" &&
+                  !attivitaForm.tipoCustom.trim()
+                }
+                className="bg-amber-500 disabled:opacity-50 py-4 rounded-2xl font-black text-slate-900 uppercase text-[10px] tracking-widest active:scale-95 transition-all shadow-[0_0_20px_rgba(245,158,11,0.3)]"
+              >
+                Avvia
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODALE GESTIONE LOGS */}
+      {showLogsExportModal && (
+        <div className="fixed inset-0 z-[1000] flex items-start pt-28 justify-center p-6 animate-in fade-in duration-300">
+          <div
+            className="absolute inset-0 bg-slate-950/90 backdrop-blur-xl"
+            onClick={() => setShowLogsExportModal(false)}
+          ></div>
+          <div className="relative glass bg-[#1e293b] border border-white/10 w-full max-w-sm rounded-[3rem] p-8 shadow-2xl">
+            <h2 className="text-white font-black text-center uppercase tracking-[0.2em] mb-6 text-sm">
+              Esporta Logs
+            </h2>
+
+            <div className="grid grid-cols-3 gap-2 mb-8">
+              {monthsList.map((month, idx) => (
+                <button
+                  key={idx}
+                  onClick={() => toggleMonth(idx)}
+                  className={`py-3 rounded-xl text-[10px] font-bold border transition-all ${
+                    selectedMonths.includes(idx)
+                      ? "bg-emerald-600/20 border-emerald-500 text-emerald-400"
+                      : "bg-white/5 border-white/10 text-slate-500"
+                  }`}
+                >
+                  {month.substring(0, 3)}
+                </button>
+              ))}
+            </div>
+
+            <div className="flex flex-col gap-3">
+              <button
+                onClick={() => {
+                  if (selectedMonths.length === 0) {
                     setConfirmAction({
-                      title: "Download Log",
-                      message: `Stai per scaricare i registri attività per i mesi selezionati.`,
+                      title: "Mese Mancante",
+                      message:
+                        "Seleziona almeno un mese dalla griglia qui sotto per scaricare i log.",
                       icon: (
                         <svg
-                          className="w-10 h-10 mx-auto mb-4 text-emerald-400 drop-shadow-[0_0_20px_rgba(52,211,153,0.7)]"
+                          className="w-10 h-10 mx-auto mb-4 text-amber-400 drop-shadow-[0_0_20px_rgba(251,191,36,0.7)]"
                           fill="none"
                           stroke="currentColor"
                           viewBox="0 0 24 24"
@@ -1455,43 +2078,66 @@ export default function Dashboard() {
                             strokeLinecap="round"
                             strokeLinejoin="round"
                             strokeWidth="1.5"
-                            d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3"
+                            d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
                           />
                         </svg>
                       ),
-                      color: "emerald",
-                      onConfirm: () => {
-                        downloadMonthlyLogs();
-                        setConfirmAction(null);
-                      },
+                      color: "amber",
+                      onConfirm: () => setConfirmAction(null),
                     });
-                  }}
-                  className="w-full bg-emerald-600 py-4 rounded-2xl font-black text-white uppercase text-[10px] tracking-widest active:scale-95 transition-all flex items-center justify-center gap-3 shadow-lg shadow-emerald-900/20"
+                    return;
+                  }
+                  setConfirmAction({
+                    title: "Download Log",
+                    message: `Stai per scaricare i registri attività per i mesi selezionati.`,
+                    icon: (
+                      <svg
+                        className="w-10 h-10 mx-auto mb-4 text-emerald-400 drop-shadow-[0_0_20px_rgba(52,211,153,0.7)]"
+                        fill="none"
+                        stroke="currentColor"
+                        viewBox="0 0 24 24"
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth="1.5"
+                          d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3"
+                        />
+                      </svg>
+                    ),
+                    color: "emerald",
+                    onConfirm: () => {
+                      downloadMonthlyLogs();
+                      setConfirmAction(null);
+                    },
+                  });
+                }}
+                className="w-full bg-emerald-600 py-4 rounded-2xl font-black text-white uppercase text-[10px] tracking-widest active:scale-95 transition-all shadow-lg shadow-emerald-900/20 flex items-center justify-center gap-3"
+              >
+                <svg
+                  className="w-4 h-4"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
                 >
-                  <svg
-                    className="w-4 h-4"
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth="2.5"
-                      d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
-                    />
-                  </svg>
-                  Scarica file log
-                </button>
-
-                {/* Bottone Chiudi (senza icona per pulizia visiva) */}
-                <button
-                  onClick={() => setShowLogModal(false)}
-                  className="w-full bg-white/5 py-4 rounded-2xl font-black text-slate-400 uppercase text-[10px] border border-white/10 active:scale-95 transition-all"
-                >
-                  Chiudi
-                </button>
-              </div>
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth="2.5"
+                    d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+                  />
+                </svg>
+                Scarica file log
+              </button>
+              <button
+                onClick={() => {
+                  setShowLogsExportModal(false);
+                  setShowLogModal(true);
+                }}
+                className="w-full bg-white/5 py-4 rounded-2xl font-black text-slate-400 uppercase text-[10px] border border-white/10 active:scale-95 transition-all"
+              >
+                Indietro
+              </button>
             </div>
           </div>
         </div>
