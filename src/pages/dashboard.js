@@ -13,6 +13,8 @@ import DistribuzioneView from "@/components/dashboard/DistribuzioneView";
 
 export default function Dashboard() {
   const router = useRouter();
+  const [listaAttivita, setListaAttivita] = useState([]);
+  const [attivitaView, setAttivitaView] = useState("list");
   const [mounted, setMounted] = useState(false);
   const [showTipoMenu, setShowTipoMenu] = useState(false);
   const [showDatePicker, setShowDatePicker] = useState(false);
@@ -83,6 +85,65 @@ export default function Dashboard() {
       note: "",
     }),
   );
+
+  const handleChiudiAttivita = async (id, tipo) => {
+    setConfirmAction({
+      title: "CHIUDI ATTIVITÀ",
+      message: `Sei sicuro di voler chiudere definitivamente questa ${tipo}? Lo scanner verrà bloccato per questa attività.`,
+      icon: (
+        <svg
+          className="w-10 h-10 mx-auto mb-4 text-red-500 drop-shadow-[0_0_20px_rgba(239,68,68,0.7)]"
+          fill="none"
+          stroke="currentColor"
+          viewBox="0 0 24 24"
+        >
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth="1.5"
+            d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
+          />
+        </svg>
+      ),
+      color: "red",
+      onConfirm: async () => {
+        setConfirmAction(null);
+        setIsProcessing(true);
+        try {
+          await supabase
+            .from("attivita")
+            .update({ stato: "CHIUSA" })
+            .eq("id", id);
+          await createLog("CHIUDI_ATTIVITA", `Chiusa attività: ${tipo}`);
+          fetchAttivita(); // Rafraîchit la liste
+        } catch (err) {
+          console.error(err);
+        } finally {
+          setIsProcessing(false);
+        }
+      },
+    });
+  };
+
+  const fetchAttivita = async () => {
+    const { data, error } = await supabase
+      .from("attivita")
+      .select("*")
+      .order("data_attivita", { ascending: false })
+      .order("ora_attivita", { ascending: false });
+
+    if (!error && data) {
+      setListaAttivita(data);
+    }
+  };
+
+  // Ce useEffect charge la liste dès qu'on ouvre la modale
+  useEffect(() => {
+    if (showAttivitaModal) {
+      fetchAttivita();
+      setAttivitaView("list"); // Remet sur la liste par défaut quand on ouvre
+    }
+  }, [showAttivitaModal]);
 
   // --- SYNCHRONISATION EN TEMPS RÉEL ---
   useEffect(() => {
@@ -600,7 +661,7 @@ export default function Dashboard() {
     const { data, error } = await supabase
       .from("prenotazioni")
       .select(
-        `id, scanned_at, numero_giornaliero, membres ( nome, cognome, tipologia_socio )`,
+        `id, scanned_at, numero_giornaliero, attivita ( tipo ), membres ( nome, cognome, tipologia_socio )`,
       )
       .order("scanned_at", { ascending: false });
 
@@ -766,6 +827,36 @@ export default function Dashboard() {
   };
 
   const handleScanSuccess = async (qrCode) => {
+    // 0. CONTROLLO ATTIVITÀ APERTA
+    const { data: attivitaAperta, error: attErr } = await supabase
+      .from("attivita")
+      .select("*")
+      .eq("stato", "APERTA")
+      .maybeSingle();
+
+    if (!attivitaAperta) {
+      return setFeedback({
+        name: "ERRORE",
+        bgColor: "bg-red-600",
+        message: "NESSUNA ATTIVITÀ APERTA",
+        icon: (
+          <svg
+            className="w-16 h-16 text-white mx-auto"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth="2"
+              d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
+            />
+          </svg>
+        ),
+      });
+    }
+
     // 1. Cerchiamo il membro tramite QR
     const { data: membre } = await supabase
       .from("membres")
@@ -819,22 +910,22 @@ export default function Dashboard() {
         ),
       });
 
-    const startOfDay = new Date();
-    startOfDay.setHours(0, 0, 0, 0);
-
-    // 2. Controllo se è già passato oggi
+    // 2. Controllo se è già passato IN QUESTA ATTIVITÀ (e non in generale oggi)
     const { data: check } = await supabase
       .from("prenotazioni")
       .select("numero_giornaliero")
       .eq("membre_id", membre.id)
-      .gt("scanned_at", startOfDay.toISOString())
+      .eq("attivita_id", attivitaAperta.id) // Controllo basato sull'ID dell'attività
       .maybeSingle();
 
     if (check)
       return setFeedback({
         name: nomComplet,
         bgColor: "bg-blue-500",
-        message: `GIÀ PASSATO: N° ${check.numero_giornaliero}`,
+        message:
+          attivitaAperta.tipo === "DISTRIBUZIONE"
+            ? `GIÀ PASSATO: N° ${check.numero_giornaliero}`
+            : "GIÀ REGISTRATO",
         icon: (
           <svg
             className="w-16 h-16 text-white mx-auto"
@@ -852,60 +943,98 @@ export default function Dashboard() {
         ),
       });
 
-    // 3. Registriamo il nuovo passaggio e CHIEDIAMO di restituire il numero generato
-    // ... dopo aver validato il membro
+    // 3. Registriamo il nuovo passaggio associandolo all'attività aperta
+    const payload = {
+      membre_id: membre.id,
+      attivita_id: attivitaAperta.id,
+    };
+
+    // Se non è una distribuzione, blocchiamo il contatore forzando il valore a NULL
+    if (attivitaAperta.tipo !== "DISTRIBUZIONE") {
+      payload.numero_giornaliero = null;
+    }
+
     const { data: newPrenotazione, error: insErr } = await supabase
       .from("prenotazioni")
-      .insert([{ membre_id: membre.id }])
+      .insert([payload])
       .select("numero_giornaliero")
       .single();
 
     if (!insErr && newPrenotazione) {
       const numero = newPrenotazione.numero_giornaliero;
 
-      // 4. Scriviamo il Log
-      await createLog(
-        "SCAN_SUCCESS",
-        `Ingresso registrato: N° ${numero}`,
-        membre.id,
-        nomComplet,
-      );
+      // 4. Logica Dinamica per Feedback e Email
+      if (attivitaAperta.tipo === "DISTRIBUZIONE") {
+        await createLog(
+          "SCAN_SUCCESS",
+          `Ingresso registrato: N° ${numero} (Attività: ${attivitaAperta.tipo})`,
+          membre.id,
+          nomComplet,
+        );
 
-      // 5. AGGIORNAMENTO: Invio email di conferma con numero e data
-      fetch("/api/notify-entry", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          email: membre.email,
-          nome: membre.nome,
-          numero_giornaliero: numero,
-        }),
-      }).catch((e) => console.error("Errore invio email conferma:", e));
+        fetch("/api/notify-entry", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            email: membre.email,
+            nome: membre.nome,
+            numero_giornaliero: numero,
+          }),
+        }).catch((e) => console.error("Errore invio email conferma:", e));
 
-      // 6. Refresh lista locale
+        setFeedback({
+          name: nomComplet,
+          bgColor: "bg-green-600",
+          message: `ENTRATA VALIDA: N° ${numero}`,
+          icon: (
+            <svg
+              className="w-16 h-16 text-white mx-auto"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth="3"
+                d="M5 13l4 4L19 7"
+              />
+            </svg>
+          ),
+        });
+      } else {
+        // --- LOGICA RIUNIONE / EVENTO (Solo presenza, niente email, icona gigante) ---
+        await createLog(
+          "PRESENZA_REGISTRATA",
+          `Presenza registrata (Attività: ${attivitaAperta.tipo})`,
+          membre.id,
+          nomComplet,
+        );
+
+        setFeedback({
+          name: nomComplet, // On garde le nom pour la validation visuelle
+          bgColor: "bg-green-600",
+          message: "", // Aucun texte "ENTRATA VALIDA"
+          icon: (
+            <svg
+              className="w-24 h-24 text-white mx-auto drop-shadow-lg"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth="3"
+                d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"
+              />
+            </svg>
+          ),
+        });
+      }
+
+      // Refresh lista locale
       fetchPrenotazioniOggi();
-
-      // 7. Feedback a schermo con il numero (ripristinato)
-      setFeedback({
-        name: nomComplet,
-        bgColor: "bg-green-600",
-        message: `ENTRATA VALIDA: N° ${numero}`, // Mostra il numero nella notifica
-        icon: (
-          <svg
-            className="w-16 h-16 text-white mx-auto"
-            fill="none"
-            stroke="currentColor"
-            viewBox="0 0 24 24"
-          >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth="3"
-              d="M5 13l4 4L19 7"
-            />
-          </svg>
-        ),
-      });
 
       setTimeout(() => setFeedback(null), 4000);
     }
@@ -1295,9 +1424,6 @@ export default function Dashboard() {
         }Grazie a ciascuno per il supporto \n\nUNISP – Ferrara`,
       });
 
-      // 4. Ouvre le modal d'envoi d'email
-      setShowMassEmailModal(true);
-
       // Reset du formulaire
       setAttivitaForm({
         tipo: "DISTRIBUZIONE",
@@ -1307,6 +1433,11 @@ export default function Dashboard() {
         luogo: "Darsena (via Darsena 81/A)",
         note: "",
       });
+
+      setAttivitaView("list");
+      fetchAttivita();
+      setShowAttivitaModal(false);
+      setShowMassEmailModal(true);
     } catch (err) {
       console.error(err);
       setModalAlert({
@@ -1578,453 +1709,619 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* MODALE GESTIONE ATTIVITÀ */}
+      {/* MODALE GESTIONE ATTIVITÀ (DASHBOARD COMPLETO) */}
       {showAttivitaModal && (
-        <div className="fixed inset-0 z-[1000] flex items-start pt-20 justify-center p-6 animate-in fade-in duration-300 overflow-y-auto">
+        <div className="fixed inset-0 z-[1000] flex items-start pt-16 justify-center p-4 animate-in fade-in duration-300 overflow-y-auto">
           <div
             className="absolute inset-0 bg-slate-950/90 backdrop-blur-xl min-h-[120%]"
             onClick={() => setShowAttivitaModal(false)}
           ></div>
-          <div className="relative glass bg-[#1e293b] border border-white/10 w-full max-w-sm rounded-[3rem] p-8 shadow-2xl my-auto pb-12">
-            <h2 className="text-white font-black text-center uppercase tracking-[0.2em] mb-6 text-sm">
-              Nuova Attività
-            </h2>
-
-            <div className="space-y-4 mb-6">
-              {/* TIPO DI ATTIVITÀ STYLISÉ COME IL MENU PRINCIPALE */}
-              <div className="relative">
-                <label className="text-[10px] font-black text-amber-400 uppercase ml-2 mb-2 block">
-                  Tipo di Attività
-                </label>
+          <div className="relative glass bg-[#1e293b] border border-white/10 w-full max-w-md rounded-[3rem] shadow-2xl my-auto flex flex-col overflow-hidden">
+            {/* INTESTAZIONE */}
+            <div className="p-8 border-b border-white/10 flex justify-between items-center bg-slate-900/50">
+              <h2 className="text-white font-black uppercase tracking-[0.2em] text-sm">
+                {attivitaView === "list"
+                  ? "Storico Attività"
+                  : "Nuova Attività"}
+              </h2>
+              {attivitaView === "list" ? (
                 <button
-                  onClick={() => {
-                    setShowTipoMenu(!showTipoMenu);
-                    setShowDatePicker(false);
-                    setShowTimePicker(false);
-                  }}
-                  className={`w-full flex items-center justify-between gap-3 bg-slate-900 border ${
-                    showTipoMenu
-                      ? "border-amber-500 text-white shadow-[0_0_15px_rgba(245,158,11,0.3)]"
-                      : "border-white/10 text-slate-300 hover:bg-white/5 hover:border-amber-500/50"
-                  } text-sm font-bold rounded-2xl px-5 py-4 transition-all relative z-[200]`}
+                  onClick={() => setAttivitaView("create")}
+                  className="bg-amber-500 text-slate-900 px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest shadow-[0_0_15px_rgba(245,158,11,0.4)] active:scale-95 transition-all"
                 >
-                  <span className="capitalize">
-                    {attivitaForm.tipo.toLowerCase()}
-                  </span>
-                  <svg
-                    className={`w-4 h-4 transition-transform ${showTipoMenu ? "rotate-180 text-amber-400" : "text-slate-500"}`}
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth="3"
-                      d="M19 9l-7 7-7-7"
-                    />
-                  </svg>
+                  + Crea Nuova
                 </button>
+              ) : (
+                <button
+                  onClick={() => setAttivitaView("list")}
+                  className="bg-white/10 text-white px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest active:scale-95 transition-all"
+                >
+                  Indietro
+                </button>
+              )}
+            </div>
 
-                {showTipoMenu && (
-                  <>
-                    <div
-                      className="fixed inset-0 z-[150]"
-                      onClick={() => setShowTipoMenu(false)}
-                    ></div>
-                    <div className="absolute top-full left-0 right-0 mt-2 bg-[#0f172a] border border-slate-700 rounded-2xl shadow-[0_20px_50px_rgba(0,0,0,0.9)] overflow-hidden animate-in fade-in zoom-in-95 slide-in-from-top-2 duration-200 z-[200]">
-                      <div className="p-2 flex flex-col gap-1">
-                        {[
-                          {
-                            val: "DISTRIBUZIONE",
-                            label: "Distribuzione",
-                            icon: "📦",
-                          },
-                          { val: "RIUNIONE", label: "Riunione", icon: "👥" },
-                          {
-                            val: "EVENTO",
-                            label: "Evento Speciale",
-                            icon: "⭐",
-                          },
-                          { val: "ALTRO", label: "Altro...", icon: "✏️" },
-                        ].map((opt, idx) => (
-                          <React.Fragment key={opt.val}>
-                            <button
-                              onClick={() => {
-                                setAttivitaForm({
-                                  ...attivitaForm,
-                                  tipo: opt.val,
-                                });
-                                setShowTipoMenu(false);
-                              }}
-                              className={`w-full text-left px-4 py-3 text-[12px] font-bold rounded-xl transition-colors flex items-center gap-3 ${attivitaForm.tipo === opt.val ? "bg-amber-500/10 text-amber-400" : "text-slate-300 hover:bg-white/5 hover:text-white"}`}
+            <div className="p-8">
+              {/* === VISTA 1 : LA LISTA DELLE ATTIVITÀ === */}
+              {attivitaView === "list" && (
+                <div className="space-y-4 max-h-[60vh] overflow-y-auto pr-2 [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-thumb]:bg-slate-700 [&::-webkit-scrollbar-thumb]:rounded-full">
+                  {listaAttivita.length === 0 ? (
+                    <p className="text-center text-slate-500 font-bold text-xs uppercase tracking-widest py-10">
+                      Nessuna attività registrata.
+                    </p>
+                  ) : (
+                    listaAttivita.map((att) => {
+                      const isAperta = att.stato === "APERTA";
+                      return (
+                        <div
+                          key={att.id}
+                          className={`relative p-5 rounded-3xl border transition-all ${
+                            isAperta
+                              ? "bg-emerald-900/20 border-emerald-500/50 shadow-[0_0_20px_rgba(16,185,129,0.1)]"
+                              : "bg-slate-900/50 border-white/5 opacity-75"
+                          }`}
+                        >
+                          {/* Pallino di stato (Pulsing se Aperta) */}
+                          <div
+                            className={`absolute top-5 right-5 w-3 h-3 rounded-full ${isAperta ? "bg-emerald-500 shadow-[0_0_10px_rgba(16,185,129,0.8)] animate-pulse" : "bg-slate-600"}`}
+                          ></div>
+
+                          <div className="flex flex-col gap-1 mb-4 pr-6">
+                            <span
+                              className={`text-[10px] font-black uppercase tracking-widest ${isAperta ? "text-emerald-400" : "text-slate-500"}`}
                             >
-                              <span className="text-base">{opt.icon}</span>
-                              {opt.label}
-                            </button>
-                            {idx === 2 && (
-                              <div className="h-px w-full bg-white/5 my-1" />
-                            )}
-                          </React.Fragment>
-                        ))}
-                      </div>
-                    </div>
-                  </>
-                )}
-              </div>
-
-              {/* INPUT CUSTOM "ALTRO" */}
-              <div
-                className={`overflow-hidden transition-all duration-300 ${attivitaForm.tipo === "ALTRO" ? "max-h-24 opacity-100" : "max-h-0 opacity-0"}`}
-              >
-                <input
-                  type="text"
-                  placeholder="Specifica il tipo..."
-                  value={attivitaForm.tipoCustom}
-                  onChange={(e) =>
-                    setAttivitaForm({
-                      ...attivitaForm,
-                      tipoCustom: e.target.value,
-                    })
-                  }
-                  className="w-full bg-slate-900/50 border border-amber-500/50 rounded-2xl px-5 py-4 text-amber-400 outline-none focus:border-amber-400 transition-all font-bold text-sm"
-                />
-              </div>
-
-              {/* LUOGO (NOUVEAU) */}
-              <div>
-                <label className="text-[10px] font-black text-amber-400 uppercase ml-2 mb-2 block">
-                  Luogo
-                </label>
-                <div className="relative">
-                  <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
-                    <svg
-                      className="w-4 h-4 text-amber-500/50"
-                      fill="none"
-                      stroke="currentColor"
-                      viewBox="0 0 24 24"
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth="2"
-                        d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"
-                      />
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth="2"
-                        d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"
-                      />
-                    </svg>
-                  </div>
-                  <input
-                    type="text"
-                    placeholder=""
-                    value={attivitaForm.luogo}
-                    onChange={(e) =>
-                      setAttivitaForm({
-                        ...attivitaForm,
-                        luogo: e.target.value,
-                      })
-                    }
-                    className="w-full bg-slate-900/50 border border-white/10 rounded-2xl pl-10 pr-5 py-4 text-white outline-none focus:border-amber-500 transition-all font-bold text-sm"
-                  />
-                </div>
-              </div>
-
-              {/* DATA E ORA CUSTOM PICKERS */}
-              <div className="grid grid-cols-2 gap-3 relative z-[150]">
-                {/* DATA PICKER */}
-                <div className="relative">
-                  <label className="text-[10px] font-black text-amber-400 uppercase ml-2 mb-2 block">
-                    Data
-                  </label>
-                  <button
-                    onClick={() => {
-                      setShowDatePicker(!showDatePicker);
-                      setShowTimePicker(false);
-                      setShowTipoMenu(false);
-                    }}
-                    className={`w-full flex items-center justify-between gap-2 bg-slate-900 border ${showDatePicker ? "border-amber-500 shadow-[0_0_15px_rgba(245,158,11,0.3)] text-white" : "border-white/10 text-slate-300 hover:border-amber-500/50 hover:bg-white/5"} rounded-2xl px-5 py-4 transition-all font-bold text-sm shadow-inner`}
-                  >
-                    <span>
-                      {attivitaForm.data.split("-").reverse().join("/")}
-                    </span>
-                    <svg
-                      className={`w-4 h-4 transition-colors ${showDatePicker ? "text-amber-500" : "text-slate-500"}`}
-                      fill="none"
-                      stroke="currentColor"
-                      viewBox="0 0 24 24"
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth="2.5"
-                        d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"
-                      />
-                    </svg>
-                  </button>
-
-                  {/* CALENDRIER POPUP */}
-                  {showDatePicker && (
-                    <>
-                      <div
-                        className="fixed inset-0 z-[150]"
-                        onClick={() => setShowDatePicker(false)}
-                      ></div>
-                      <div className="absolute top-full left-0 mt-2 p-4 w-[260px] bg-[#0f172a] border border-slate-700 rounded-3xl shadow-[0_20px_50px_rgba(0,0,0,0.9)] z-[200] animate-in fade-in zoom-in-95 duration-200">
-                        <div className="flex justify-between items-center mb-4">
-                          <button
-                            onClick={(e) => {
-                              e.preventDefault();
-                              setCalendarView(
-                                new Date(
-                                  calendarView.getFullYear(),
-                                  calendarView.getMonth() - 1,
-                                  1,
-                                ),
-                              );
-                            }}
-                            className="text-slate-400 hover:text-white p-1.5 bg-white/5 hover:bg-white/10 rounded-lg active:scale-90 transition-all"
-                          >
-                            <svg
-                              className="w-4 h-4"
-                              fill="none"
-                              stroke="currentColor"
-                              viewBox="0 0 24 24"
-                            >
-                              <path
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                                strokeWidth="3"
-                                d="M15 19l-7-7 7-7"
-                              />
-                            </svg>
-                          </button>
-                          <span className="text-white font-black text-[10px] uppercase tracking-widest">
-                            {calendarView.toLocaleString("it-IT", {
-                              month: "long",
-                              year: "numeric",
-                            })}
-                          </span>
-                          <button
-                            onClick={(e) => {
-                              e.preventDefault();
-                              setCalendarView(
-                                new Date(
-                                  calendarView.getFullYear(),
-                                  calendarView.getMonth() + 1,
-                                  1,
-                                ),
-                              );
-                            }}
-                            className="text-slate-400 hover:text-white p-1.5 bg-white/5 hover:bg-white/10 rounded-lg active:scale-90 transition-all"
-                          >
-                            <svg
-                              className="w-4 h-4"
-                              fill="none"
-                              stroke="currentColor"
-                              viewBox="0 0 24 24"
-                            >
-                              <path
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                                strokeWidth="3"
-                                d="M9 5l7 7-7 7"
-                              />
-                            </svg>
-                          </button>
-                        </div>
-                        <div className="grid grid-cols-7 gap-1 text-center mb-2 border-b border-white/5 pb-2">
-                          {["Lu", "Ma", "Me", "Gi", "Ve", "Sa", "Do"].map(
-                            (d) => (
-                              <span
-                                key={d}
-                                className="text-[8px] font-black text-slate-500"
-                              >
-                                {d}
+                              {att.stato}
+                            </span>
+                            <span className="text-white font-black text-lg uppercase tracking-tight">
+                              {att.tipo}
+                            </span>
+                            <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] font-bold text-slate-400 mt-1">
+                              <span className="flex items-center gap-1">
+                                <svg
+                                  className="w-3.5 h-3.5"
+                                  fill="none"
+                                  stroke="currentColor"
+                                  viewBox="0 0 24 24"
+                                >
+                                  <path
+                                    strokeLinecap="round"
+                                    strokeLinejoin="round"
+                                    strokeWidth="2"
+                                    d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"
+                                  />
+                                </svg>
+                                {att.data_attivita
+                                  ?.split("-")
+                                  .reverse()
+                                  .join("/")}
                               </span>
-                            ),
+                              <span className="flex items-center gap-1">
+                                <svg
+                                  className="w-3.5 h-3.5"
+                                  fill="none"
+                                  stroke="currentColor"
+                                  viewBox="0 0 24 24"
+                                >
+                                  <path
+                                    strokeLinecap="round"
+                                    strokeLinejoin="round"
+                                    strokeWidth="2"
+                                    d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
+                                  />
+                                </svg>
+                                {att.ora_attivita?.substring(0, 5)}
+                              </span>
+                              <span className="flex items-center gap-1 text-slate-500 w-full mt-1">
+                                <svg
+                                  className="w-3.5 h-3.5"
+                                  fill="none"
+                                  stroke="currentColor"
+                                  viewBox="0 0 24 24"
+                                >
+                                  <path
+                                    strokeLinecap="round"
+                                    strokeLinejoin="round"
+                                    strokeWidth="2"
+                                    d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"
+                                  />
+                                  <path
+                                    strokeLinecap="round"
+                                    strokeLinejoin="round"
+                                    strokeWidth="2"
+                                    d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"
+                                  />
+                                </svg>
+                                {att.luogo || "Sede Centrale"}
+                              </span>
+                            </div>
+                          </div>
+
+                          {/* BOTTONE CHIUDI (Solo se aperta) */}
+                          {isAperta && (
+                            <button
+                              onClick={() =>
+                                handleChiudiAttivita(att.id, att.tipo)
+                              }
+                              className="w-full mt-2 bg-red-500/10 border border-red-500/30 text-red-400 py-3 rounded-xl font-black text-[10px] uppercase tracking-widest hover:bg-red-500 hover:text-white transition-all active:scale-95 flex items-center justify-center gap-2"
+                            >
+                              <svg
+                                className="w-4 h-4"
+                                fill="none"
+                                stroke="currentColor"
+                                viewBox="0 0 24 24"
+                              >
+                                <path
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                  strokeWidth="2.5"
+                                  d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
+                                />
+                              </svg>
+                              Chiudi Attività
+                            </button>
                           )}
                         </div>
-                        <div className="grid grid-cols-7 gap-1 text-center">
-                          {(() => {
-                            const year = calendarView.getFullYear();
-                            const month = calendarView.getMonth();
-                            const daysInMonth = new Date(
-                              year,
-                              month + 1,
-                              0,
-                            ).getDate();
-                            const firstDay = new Date(year, month, 1).getDay();
-                            const startDay = firstDay === 0 ? 6 : firstDay - 1;
-                            const days = Array(startDay)
-                              .fill(null)
-                              .concat(
-                                Array.from(
-                                  { length: daysInMonth },
-                                  (_, i) => i + 1,
-                                ),
-                              );
-                            return days.map((d, i) => {
-                              if (!d) return <div key={`empty-${i}`}></div>;
-                              const dateStr = `${year}-${String(month + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
-                              const isSelected = attivitaForm.data === dateStr;
-                              const isToday =
-                                new Date().toISOString().split("T")[0] ===
-                                dateStr;
-                              return (
+                      );
+                    })
+                  )}
+                </div>
+              )}
+
+              {/* === VISTA 2 : IL FORM DI CREAZIONE (Tuo codice intatto) === */}
+              {attivitaView === "create" && (
+                <div className="space-y-4 animate-in slide-in-from-right duration-300">
+                  {/* TIPO DI ATTIVITÀ STYLISÉ */}
+                  <div className="relative">
+                    <label className="text-[10px] font-black text-amber-400 uppercase ml-2 mb-2 block">
+                      Tipo di Attività
+                    </label>
+                    <button
+                      onClick={() => {
+                        setShowTipoMenu(!showTipoMenu);
+                        setShowDatePicker(false);
+                        setShowTimePicker(false);
+                      }}
+                      className={`w-full flex items-center justify-between gap-3 bg-slate-900 border ${
+                        showTipoMenu
+                          ? "border-amber-500 text-white shadow-[0_0_15px_rgba(245,158,11,0.3)]"
+                          : "border-white/10 text-slate-300 hover:bg-white/5 hover:border-amber-500/50"
+                      } text-sm font-bold rounded-2xl px-5 py-4 transition-all relative z-[200]`}
+                    >
+                      <span className="capitalize">
+                        {attivitaForm.tipo.toLowerCase()}
+                      </span>
+                      <svg
+                        className={`w-4 h-4 transition-transform ${showTipoMenu ? "rotate-180 text-amber-400" : "text-slate-500"}`}
+                        fill="none"
+                        stroke="currentColor"
+                        viewBox="0 0 24 24"
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth="3"
+                          d="M19 9l-7 7-7-7"
+                        />
+                      </svg>
+                    </button>
+
+                    {showTipoMenu && (
+                      <>
+                        <div
+                          className="fixed inset-0 z-[150]"
+                          onClick={() => setShowTipoMenu(false)}
+                        ></div>
+                        <div className="absolute top-full left-0 right-0 mt-2 bg-[#0f172a] border border-slate-700 rounded-2xl shadow-[0_20px_50px_rgba(0,0,0,0.9)] overflow-hidden animate-in fade-in zoom-in-95 slide-in-from-top-2 duration-200 z-[200]">
+                          <div className="p-2 flex flex-col gap-1">
+                            {[
+                              {
+                                val: "DISTRIBUZIONE",
+                                label: "Distribuzione",
+                                icon: "📦",
+                              },
+                              {
+                                val: "RIUNIONE",
+                                label: "Riunione",
+                                icon: "👥",
+                              },
+                              {
+                                val: "EVENTO",
+                                label: "Evento Speciale",
+                                icon: "⭐",
+                              },
+                              { val: "ALTRO", label: "Altro...", icon: "✏️" },
+                            ].map((opt, idx) => (
+                              <React.Fragment key={opt.val}>
                                 <button
-                                  key={i}
+                                  onClick={() => {
+                                    setAttivitaForm({
+                                      ...attivitaForm,
+                                      tipo: opt.val,
+                                    });
+                                    setShowTipoMenu(false);
+                                  }}
+                                  className={`w-full text-left px-4 py-3 text-[12px] font-bold rounded-xl transition-colors flex items-center gap-3 ${attivitaForm.tipo === opt.val ? "bg-amber-500/10 text-amber-400" : "text-slate-300 hover:bg-white/5 hover:text-white"}`}
+                                >
+                                  <span className="text-base">{opt.icon}</span>
+                                  {opt.label}
+                                </button>
+                                {idx === 2 && (
+                                  <div className="h-px w-full bg-white/5 my-1" />
+                                )}
+                              </React.Fragment>
+                            ))}
+                          </div>
+                        </div>
+                      </>
+                    )}
+                  </div>
+
+                  {/* INPUT CUSTOM "ALTRO" */}
+                  <div
+                    className={`overflow-hidden transition-all duration-300 ${attivitaForm.tipo === "ALTRO" ? "max-h-24 opacity-100" : "max-h-0 opacity-0"}`}
+                  >
+                    <input
+                      type="text"
+                      placeholder="Specifica il tipo..."
+                      value={attivitaForm.tipoCustom}
+                      onChange={(e) =>
+                        setAttivitaForm({
+                          ...attivitaForm,
+                          tipoCustom: e.target.value,
+                        })
+                      }
+                      className="w-full bg-slate-900/50 border border-amber-500/50 rounded-2xl px-5 py-4 text-amber-400 outline-none focus:border-amber-400 transition-all font-bold text-sm"
+                    />
+                  </div>
+
+                  {/* LUOGO */}
+                  <div>
+                    <label className="text-[10px] font-black text-amber-400 uppercase ml-2 mb-2 block">
+                      Luogo
+                    </label>
+                    <div className="relative">
+                      <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
+                        <svg
+                          className="w-4 h-4 text-amber-500/50"
+                          fill="none"
+                          stroke="currentColor"
+                          viewBox="0 0 24 24"
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth="2"
+                            d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"
+                          />
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth="2"
+                            d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"
+                          />
+                        </svg>
+                      </div>
+                      <input
+                        type="text"
+                        placeholder="Es: Sede Centrale"
+                        value={attivitaForm.luogo}
+                        onChange={(e) =>
+                          setAttivitaForm({
+                            ...attivitaForm,
+                            luogo: e.target.value,
+                          })
+                        }
+                        className="w-full bg-slate-900/50 border border-white/10 rounded-2xl pl-10 pr-5 py-4 text-white outline-none focus:border-amber-500 transition-all font-bold text-sm"
+                      />
+                    </div>
+                  </div>
+
+                  {/* DATA E ORA CUSTOM PICKERS */}
+                  <div className="grid grid-cols-2 gap-3 relative z-[150]">
+                    {/* DATA PICKER */}
+                    <div className="relative">
+                      <label className="text-[10px] font-black text-amber-400 uppercase ml-2 mb-2 block">
+                        Data
+                      </label>
+                      <button
+                        onClick={() => {
+                          setShowDatePicker(!showDatePicker);
+                          setShowTimePicker(false);
+                          setShowTipoMenu(false);
+                        }}
+                        className={`w-full flex items-center justify-between gap-2 bg-slate-900 border ${showDatePicker ? "border-amber-500 shadow-[0_0_15px_rgba(245,158,11,0.3)] text-white" : "border-white/10 text-slate-300 hover:border-amber-500/50 hover:bg-white/5"} rounded-2xl px-5 py-4 transition-all font-bold text-sm shadow-inner`}
+                      >
+                        <span>
+                          {attivitaForm.data.split("-").reverse().join("/")}
+                        </span>
+                        <svg
+                          className={`w-4 h-4 transition-colors ${showDatePicker ? "text-amber-500" : "text-slate-500"}`}
+                          fill="none"
+                          stroke="currentColor"
+                          viewBox="0 0 24 24"
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth="2.5"
+                            d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"
+                          />
+                        </svg>
+                      </button>
+
+                      {/* CALENDRIER POPUP */}
+                      {showDatePicker && (
+                        <>
+                          <div
+                            className="fixed inset-0 z-[150]"
+                            onClick={() => setShowDatePicker(false)}
+                          ></div>
+                          <div className="absolute top-full left-0 mt-2 p-4 w-[260px] bg-[#0f172a] border border-slate-700 rounded-3xl shadow-[0_20px_50px_rgba(0,0,0,0.9)] z-[200] animate-in fade-in zoom-in-95 duration-200">
+                            <div className="flex justify-between items-center mb-4">
+                              <button
+                                onClick={(e) => {
+                                  e.preventDefault();
+                                  setCalendarView(
+                                    new Date(
+                                      calendarView.getFullYear(),
+                                      calendarView.getMonth() - 1,
+                                      1,
+                                    ),
+                                  );
+                                }}
+                                className="text-slate-400 hover:text-white p-1.5 bg-white/5 hover:bg-white/10 rounded-lg active:scale-90 transition-all"
+                              >
+                                <svg
+                                  className="w-4 h-4"
+                                  fill="none"
+                                  stroke="currentColor"
+                                  viewBox="0 0 24 24"
+                                >
+                                  <path
+                                    strokeLinecap="round"
+                                    strokeLinejoin="round"
+                                    strokeWidth="3"
+                                    d="M15 19l-7-7 7-7"
+                                  />
+                                </svg>
+                              </button>
+                              <span className="text-white font-black text-[10px] uppercase tracking-widest">
+                                {calendarView.toLocaleString("it-IT", {
+                                  month: "long",
+                                  year: "numeric",
+                                })}
+                              </span>
+                              <button
+                                onClick={(e) => {
+                                  e.preventDefault();
+                                  setCalendarView(
+                                    new Date(
+                                      calendarView.getFullYear(),
+                                      calendarView.getMonth() + 1,
+                                      1,
+                                    ),
+                                  );
+                                }}
+                                className="text-slate-400 hover:text-white p-1.5 bg-white/5 hover:bg-white/10 rounded-lg active:scale-90 transition-all"
+                              >
+                                <svg
+                                  className="w-4 h-4"
+                                  fill="none"
+                                  stroke="currentColor"
+                                  viewBox="0 0 24 24"
+                                >
+                                  <path
+                                    strokeLinecap="round"
+                                    strokeLinejoin="round"
+                                    strokeWidth="3"
+                                    d="M9 5l7 7-7 7"
+                                  />
+                                </svg>
+                              </button>
+                            </div>
+                            <div className="grid grid-cols-7 gap-1 text-center mb-2 border-b border-white/5 pb-2">
+                              {["Lu", "Ma", "Me", "Gi", "Ve", "Sa", "Do"].map(
+                                (d) => (
+                                  <span
+                                    key={d}
+                                    className="text-[8px] font-black text-slate-500"
+                                  >
+                                    {d}
+                                  </span>
+                                ),
+                              )}
+                            </div>
+                            <div className="grid grid-cols-7 gap-1 text-center">
+                              {(() => {
+                                const year = calendarView.getFullYear();
+                                const month = calendarView.getMonth();
+                                const daysInMonth = new Date(
+                                  year,
+                                  month + 1,
+                                  0,
+                                ).getDate();
+                                const firstDay = new Date(
+                                  year,
+                                  month,
+                                  1,
+                                ).getDay();
+                                const startDay =
+                                  firstDay === 0 ? 6 : firstDay - 1;
+                                const days = Array(startDay)
+                                  .fill(null)
+                                  .concat(
+                                    Array.from(
+                                      { length: daysInMonth },
+                                      (_, i) => i + 1,
+                                    ),
+                                  );
+                                return days.map((d, i) => {
+                                  if (!d) return <div key={`empty-${i}`}></div>;
+                                  const dateStr = `${year}-${String(month + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+                                  const isSelected =
+                                    attivitaForm.data === dateStr;
+                                  const isToday =
+                                    new Date().toISOString().split("T")[0] ===
+                                    dateStr;
+                                  return (
+                                    <button
+                                      key={i}
+                                      onClick={(e) => {
+                                        e.preventDefault();
+                                        setAttivitaForm({
+                                          ...attivitaForm,
+                                          data: dateStr,
+                                        });
+                                        setShowDatePicker(false);
+                                      }}
+                                      className={`w-7 h-7 rounded-full text-[10px] font-black transition-all flex items-center justify-center mx-auto ${isSelected ? "bg-amber-500 text-slate-900 shadow-[0_0_10px_rgba(245,158,11,0.5)] scale-110" : isToday ? "border border-amber-500/50 text-amber-400" : "text-slate-300 hover:bg-white/10 hover:text-white"}`}
+                                    >
+                                      {d}
+                                    </button>
+                                  );
+                                });
+                              })()}
+                            </div>
+                          </div>
+                        </>
+                      )}
+                    </div>
+
+                    {/* ORA PICKER */}
+                    <div className="relative">
+                      <label className="text-[10px] font-black text-amber-400 uppercase ml-2 mb-2 block">
+                        Ora
+                      </label>
+                      <button
+                        onClick={() => {
+                          setShowTimePicker(!showTimePicker);
+                          setShowDatePicker(false);
+                          setShowTipoMenu(false);
+                        }}
+                        className={`w-full flex items-center justify-between gap-2 bg-slate-900 border ${showTimePicker ? "border-amber-500 shadow-[0_0_15px_rgba(245,158,11,0.3)] text-white" : "border-white/10 text-slate-300 hover:border-amber-500/50 hover:bg-white/5"} rounded-2xl px-5 py-4 transition-all font-bold text-sm shadow-inner`}
+                      >
+                        <span>{attivitaForm.ora}</span>
+                        <svg
+                          className={`w-4 h-4 transition-colors ${showTimePicker ? "text-amber-500" : "text-slate-500"}`}
+                          fill="none"
+                          stroke="currentColor"
+                          viewBox="0 0 24 24"
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth="2.5"
+                            d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
+                          />
+                        </svg>
+                      </button>
+
+                      {/* HORLOGE POPUP */}
+                      {showTimePicker && (
+                        <>
+                          <div
+                            className="fixed inset-0 z-[150]"
+                            onClick={() => setShowTimePicker(false)}
+                          ></div>
+                          <div className="absolute top-full right-0 mt-2 p-4 w-[220px] bg-[#0f172a] border border-slate-700 rounded-3xl shadow-[0_20px_50px_rgba(0,0,0,0.9)] z-[200] flex gap-3 animate-in fade-in zoom-in-95 duration-200">
+                            <div className="flex-1 h-48 overflow-y-auto pr-1 [&::-webkit-scrollbar]:w-1 [&::-webkit-scrollbar-thumb]:bg-slate-700 [&::-webkit-scrollbar-thumb]:rounded-full scroll-smooth">
+                              <p className="text-[8px] font-black text-slate-500 text-center mb-3 uppercase tracking-widest sticky top-0 bg-[#0f172a] pb-1">
+                                Ore
+                              </p>
+                              {Array.from({ length: 24 }, (_, i) =>
+                                String(i).padStart(2, "0"),
+                              ).map((h) => (
+                                <button
+                                  key={`h-${h}`}
                                   onClick={(e) => {
                                     e.preventDefault();
                                     setAttivitaForm({
                                       ...attivitaForm,
-                                      data: dateStr,
+                                      ora: `${h}:${attivitaForm.ora.split(":")[1] || "00"}`,
                                     });
-                                    setShowDatePicker(false);
                                   }}
-                                  className={`w-7 h-7 rounded-full text-[10px] font-black transition-all flex items-center justify-center mx-auto ${isSelected ? "bg-amber-500 text-slate-900 shadow-[0_0_10px_rgba(245,158,11,0.5)] scale-110" : isToday ? "border border-amber-500/50 text-amber-400" : "text-slate-300 hover:bg-white/10 hover:text-white"}`}
+                                  className={`w-full py-2.5 mb-1.5 rounded-xl text-[12px] font-black transition-all ${attivitaForm.ora.startsWith(h) ? "bg-amber-500 text-slate-900 shadow-md" : "text-slate-400 hover:bg-white/10 hover:text-white"}`}
                                 >
-                                  {d}
+                                  {h}
                                 </button>
-                              );
-                            });
-                          })()}
-                        </div>
-                      </div>
-                    </>
-                  )}
-                </div>
+                              ))}
+                            </div>
+                            <div className="flex flex-col justify-center text-slate-600 font-black pb-4 text-xl">
+                              :
+                            </div>
+                            <div className="flex-1 h-48 overflow-y-auto pr-1 [&::-webkit-scrollbar]:w-1 [&::-webkit-scrollbar-thumb]:bg-slate-700 [&::-webkit-scrollbar-thumb]:rounded-full scroll-smooth">
+                              <p className="text-[8px] font-black text-slate-500 text-center mb-3 uppercase tracking-widest sticky top-0 bg-[#0f172a] pb-1">
+                                Min
+                              </p>
+                              {Array.from({ length: 60 }, (_, i) =>
+                                String(i).padStart(2, "0"),
+                              ).map((m) => (
+                                <button
+                                  key={`m-${m}`}
+                                  onClick={(e) => {
+                                    e.preventDefault();
+                                    setAttivitaForm({
+                                      ...attivitaForm,
+                                      ora: `${attivitaForm.ora.split(":")[0] || "12"}:${m}`,
+                                    });
+                                    setShowTimePicker(false);
+                                  }}
+                                  className={`w-full py-2.5 mb-1.5 rounded-xl text-[12px] font-black transition-all ${attivitaForm.ora.endsWith(`:${m}`) ? "bg-amber-500 text-slate-900 shadow-md" : "text-slate-400 hover:bg-white/10 hover:text-white"}`}
+                                >
+                                  {m}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  </div>
 
-                {/* ORA PICKER */}
-                <div className="relative">
-                  <label className="text-[10px] font-black text-amber-400 uppercase ml-2 mb-2 block">
-                    Ora
-                  </label>
+                  {/* NOTE */}
+                  <div className="pt-2">
+                    <label className="text-[10px] font-black text-amber-400 uppercase ml-2 mb-2 block">
+                      Note (Opzionale)
+                    </label>
+                    <textarea
+                      rows="2"
+                      placeholder="Aggiungi una descrizione o nota..."
+                      value={attivitaForm.note}
+                      onChange={(e) =>
+                        setAttivitaForm({
+                          ...attivitaForm,
+                          note: e.target.value,
+                        })
+                      }
+                      className="w-full bg-slate-900/50 border border-white/10 rounded-2xl px-5 py-4 text-white outline-none focus:border-amber-500 transition-all text-sm"
+                    ></textarea>
+                  </div>
+
+                  {/* BOTTONE AVVIA */}
                   <button
-                    onClick={() => {
-                      setShowTimePicker(!showTimePicker);
-                      setShowDatePicker(false);
-                      setShowTipoMenu(false);
-                    }}
-                    className={`w-full flex items-center justify-between gap-2 bg-slate-900 border ${showTimePicker ? "border-amber-500 shadow-[0_0_15px_rgba(245,158,11,0.3)] text-white" : "border-white/10 text-slate-300 hover:border-amber-500/50 hover:bg-white/5"} rounded-2xl px-5 py-4 transition-all font-bold text-sm shadow-inner`}
+                    onClick={handleAvviaAttivita}
+                    disabled={
+                      attivitaForm.tipo === "ALTRO" &&
+                      !attivitaForm.tipoCustom.trim()
+                    }
+                    className="w-full bg-amber-500 disabled:opacity-50 py-4 mt-6 rounded-2xl font-black text-slate-900 uppercase text-[10px] tracking-widest active:scale-95 transition-all shadow-[0_0_20px_rgba(245,158,11,0.3)]"
                   >
-                    <span>{attivitaForm.ora}</span>
-                    <svg
-                      className={`w-4 h-4 transition-colors ${showTimePicker ? "text-amber-500" : "text-slate-500"}`}
-                      fill="none"
-                      stroke="currentColor"
-                      viewBox="0 0 24 24"
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth="2.5"
-                        d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
-                      />
-                    </svg>
+                    Avvia Attività
                   </button>
-
-                  {/* HORLOGE POPUP */}
-                  {showTimePicker && (
-                    <>
-                      <div
-                        className="fixed inset-0 z-[150]"
-                        onClick={() => setShowTimePicker(false)}
-                      ></div>
-                      <div className="absolute top-full right-0 mt-2 p-4 w-[220px] bg-[#0f172a] border border-slate-700 rounded-3xl shadow-[0_20px_50px_rgba(0,0,0,0.9)] z-[200] flex gap-3 animate-in fade-in zoom-in-95 duration-200">
-                        <div className="flex-1 h-48 overflow-y-auto pr-1 [&::-webkit-scrollbar]:w-1 [&::-webkit-scrollbar-thumb]:bg-slate-700 [&::-webkit-scrollbar-thumb]:rounded-full scroll-smooth">
-                          <p className="text-[8px] font-black text-slate-500 text-center mb-3 uppercase tracking-widest sticky top-0 bg-[#0f172a] pb-1">
-                            Ore
-                          </p>
-                          {Array.from({ length: 24 }, (_, i) =>
-                            String(i).padStart(2, "0"),
-                          ).map((h) => (
-                            <button
-                              key={`h-${h}`}
-                              onClick={(e) => {
-                                e.preventDefault();
-                                setAttivitaForm({
-                                  ...attivitaForm,
-                                  ora: `${h}:${attivitaForm.ora.split(":")[1] || "00"}`,
-                                });
-                              }}
-                              className={`w-full py-2.5 mb-1.5 rounded-xl text-[12px] font-black transition-all ${attivitaForm.ora.startsWith(h) ? "bg-amber-500 text-slate-900 shadow-md" : "text-slate-400 hover:bg-white/10 hover:text-white"}`}
-                            >
-                              {h}
-                            </button>
-                          ))}
-                        </div>
-                        <div className="flex flex-col justify-center text-slate-600 font-black pb-4 text-xl">
-                          :
-                        </div>
-                        <div className="flex-1 h-48 overflow-y-auto pr-1 [&::-webkit-scrollbar]:w-1 [&::-webkit-scrollbar-thumb]:bg-slate-700 [&::-webkit-scrollbar-thumb]:rounded-full scroll-smooth">
-                          <p className="text-[8px] font-black text-slate-500 text-center mb-3 uppercase tracking-widest sticky top-0 bg-[#0f172a] pb-1">
-                            Min
-                          </p>
-                          {Array.from({ length: 60 }, (_, i) =>
-                            String(i).padStart(2, "0"),
-                          ).map((m) => (
-                            <button
-                              key={`m-${m}`}
-                              onClick={(e) => {
-                                e.preventDefault();
-                                setAttivitaForm({
-                                  ...attivitaForm,
-                                  ora: `${attivitaForm.ora.split(":")[0] || "12"}:${m}`,
-                                });
-                                setShowTimePicker(false);
-                              }}
-                              className={`w-full py-2.5 mb-1.5 rounded-xl text-[12px] font-black transition-all ${attivitaForm.ora.endsWith(`:${m}`) ? "bg-amber-500 text-slate-900 shadow-md" : "text-slate-400 hover:bg-white/10 hover:text-white"}`}
-                            >
-                              {m}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    </>
-                  )}
                 </div>
-              </div>
-
-              {/* NOTE */}
-              <div className="pt-2">
-                <label className="text-[10px] font-black text-amber-400 uppercase ml-2 mb-2 block">
-                  Note (Opzionale)
-                </label>
-                <textarea
-                  rows="2"
-                  placeholder="Aggiungi una descrizione o nota..."
-                  value={attivitaForm.note}
-                  onChange={(e) =>
-                    setAttivitaForm({ ...attivitaForm, note: e.target.value })
-                  }
-                  className="w-full bg-slate-900/50 border border-white/10 rounded-2xl px-5 py-4 text-white outline-none focus:border-amber-500 transition-all text-sm"
-                ></textarea>
-              </div>
+              )}
             </div>
 
-            <div className="grid grid-cols-2 gap-3 mt-8">
+            {/* FOOTER MODALE (Pulsante di chiusura generale) */}
+            <div className="p-6 border-t border-white/5 bg-slate-900/30">
               <button
                 onClick={() => {
                   setShowAttivitaModal(false);
                   setShowLogModal(true);
                 }}
-                className="bg-white/5 py-4 rounded-2xl font-black text-slate-500 uppercase text-[10px] tracking-widest border border-white/5 active:scale-95"
+                className="w-full bg-white/5 py-4 rounded-2xl font-black text-slate-500 uppercase text-[10px] tracking-widest border border-white/5 active:scale-95 transition-all"
               >
-                Indietro
-              </button>
-              <button
-                onClick={handleAvviaAttivita}
-                disabled={
-                  attivitaForm.tipo === "ALTRO" &&
-                  !attivitaForm.tipoCustom.trim()
-                }
-                className="bg-amber-500 disabled:opacity-50 py-4 rounded-2xl font-black text-slate-900 uppercase text-[10px] tracking-widest active:scale-95 transition-all shadow-[0_0_20px_rgba(245,158,11,0.3)]"
-              >
-                Avvia
+                Torna al Pannello
               </button>
             </div>
           </div>
