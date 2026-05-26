@@ -13,6 +13,7 @@ export default function DistribuzioneView({
   const [isLoadingCloud, setIsLoadingCloud] = useState(true); // Pour le petit effet de chargement au début
   const [errorAlert, setErrorAlert] = useState(null);
   const [numeroDeleghe, setNumeroDeleghe] = useState(0);
+  const [activeAttivitaId, setActiveAttivitaId] = useState(null);
 
   // --- NOUVEAU BLOC SÉCURITÉ ---
   const isAuthorized =
@@ -42,7 +43,7 @@ export default function DistribuzioneView({
     });
   };
   // -----------------------------
-  // 1. 100% CLOUD : On va chercher les aliments d'AUJOURD'HUI dans la base de données
+  // 1. 100% CLOUD : On va chercher les aliments d'AUJOURD'HUI
   const fetchAlimentiOggi = async () => {
     try {
       setIsLoadingCloud(true);
@@ -51,15 +52,11 @@ export default function DistribuzioneView({
 
       const { data, error } = await supabase
         .from("alimenti")
-        .select("*") // Récupère toutes les colonnes, y compris 'deleghe'
+        .select("*")
         .gte("created_at", startOfDay.toISOString());
 
       if (!error && data && data.length > 0) {
         setAlimentiLocali(data);
-        // Si la colonne 'deleghe' existe dans ta table, on met à jour l'état local
-        if (data[0].deleghe !== undefined) {
-          setNumeroDeleghe(data[0].deleghe || 0);
-        }
       } else {
         setAlimentiLocali([]);
       }
@@ -70,15 +67,14 @@ export default function DistribuzioneView({
     }
   };
 
+  // 2. SAUVEGARDE DES DELEGHE DANS LA TABLE ATTIVITA
   const updateDelegheCloud = async (val) => {
-    const startOfDay = new Date();
-    startOfDay.setHours(0, 0, 0, 0);
+    if (!activeAttivitaId) return; // Sécurité : ne sauvegarde que si une activité est ouverte
 
-    // Met à jour la valeur dans la base de données pour aujourd'hui
     const { error } = await supabase
-      .from("alimenti")
-      .update({ deleghe: val })
-      .gte("created_at", startOfDay.toISOString());
+      .from("attivita")
+      .update({ numero_deleghe: val })
+      .eq("id", activeAttivitaId);
 
     if (error) {
       console.error("Erreur de sauvegarde des deleghe:", error);
@@ -87,9 +83,43 @@ export default function DistribuzioneView({
     }
   };
 
-  // Au chargement de l'onglet, on vérifie le cloud
+  // 3. CHARGEMENT INITIAL ET SYNCHRO EN TEMPS RÉEL (MAGIE DU CLOUD)
   useEffect(() => {
     fetchAlimentiOggi();
+
+    // Cherche l'activité ouverte pour charger le vrai nombre de deleghe
+    const fetchAttivitaAperta = async () => {
+      const { data } = await supabase
+        .from("attivita")
+        .select("id, numero_deleghe")
+        .eq("stato", "APERTA")
+        .maybeSingle();
+
+      if (data) {
+        setActiveAttivitaId(data.id);
+        setNumeroDeleghe(data.numero_deleghe || 0);
+      }
+    };
+
+    fetchAttivitaAperta();
+
+    // Écoute les changements des autres téléphones en direct !
+    const subscription = supabase
+      .channel("sync_deleghe")
+      .on(
+        "postgres_changes",
+        { event: "UPDATE", schema: "public", table: "attivita" },
+        (payload) => {
+          if (payload.new.stato === "APERTA") {
+            setNumeroDeleghe(payload.new.numero_deleghe || 0);
+          }
+        },
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(subscription);
+    };
   }, []);
 
   const handleFileUpload = (e) => {
@@ -337,7 +367,8 @@ export default function DistribuzioneView({
                 onBlur={(e) =>
                   updateDelegheCloud(Math.max(0, parseInt(e.target.value) || 0))
                 }
-                className="w-14 h-7 bg-slate-900/50 border border-white/10 rounded-lg text-center text-white text-[10px] font-black outline-none focus:border-blue-500 transition-all"
+                disabled={!activeAttivitaId}
+                className="w-14 h-7 bg-slate-900/50 border border-white/10 rounded-lg text-center text-white text-[10px] font-black outline-none focus:border-blue-500 transition-all disabled:opacity-50"
               />
             </div>
           )}
