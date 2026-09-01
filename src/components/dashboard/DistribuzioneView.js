@@ -13,6 +13,7 @@ export default function DistribuzioneView({
   const [isLoadingCloud, setIsLoadingCloud] = useState(true); // Pour le petit effet de chargement au début
   const [errorAlert, setErrorAlert] = useState(null);
   const [numeroDeleghe, setNumeroDeleghe] = useState(0);
+  const [staffCount, setStaffCount] = useState(0);
   const [activeAttivitaId, setActiveAttivitaId] = useState(null);
 
   // --- NOUVEAU BLOC SÉCURITÉ ---
@@ -101,7 +102,19 @@ export default function DistribuzioneView({
       }
     };
 
+    // Conta esattamente quanti membri dello staff/admin ci sono, in modo sicuro
+    const fetchStaffCount = async () => {
+      const { count } = await supabase
+        .from("membres")
+        .select("*", { count: "exact", head: true })
+        .in("tipologia_socio", ["ADMIN", "STAFF"]);
+        
+      if (count !== null) setStaffCount(count);
+    };
+
     fetchAttivitaAperta();
+    fetchStaffCount();
+
 
     // Écoute les changements des autres téléphones en direct !
     const subscription = supabase
@@ -245,10 +258,8 @@ export default function DistribuzioneView({
     }
   };
 
-  // 1. CALCUL DU STAFF (Vérifie bien que tu n'as que 2 personnes Admin/Staff dans ta liste)
-  const staffTotal = (membres || []).filter((m) =>
-    ["ADMIN", "STAFF"].includes(m.tipologia_socio?.toUpperCase()),
-  ).length;
+  // NUOVO CALCOLO UGUALE PER TUTTI I TELEFONI
+  const staffTotal = staffCount;
 
   const poidsStaff = staffTotal * 3;
 

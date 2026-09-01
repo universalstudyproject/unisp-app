@@ -89,7 +89,7 @@ export default function Dashboard() {
   const handleChiudiAttivita = async (id, tipo) => {
     setConfirmAction({
       title: "CHIUDI ATTIVITÀ",
-      message: `Sei sicuro di voler chiudere definitivamente questa ${tipo}? Lo scanner verrà bloccato per questa attività.`,
+      message: `Sei sicuro di voler chiudere questa ${tipo}? Il sistema calcolerà in automatico le assenze, invierà le email di avviso (6) e sospenderà gli utenti (7).`,
       icon: (
         <svg
           className="w-10 h-10 mx-auto mb-4 text-red-500 drop-shadow-[0_0_20px_rgba(239,68,68,0.7)]"
@@ -110,12 +110,89 @@ export default function Dashboard() {
         setConfirmAction(null);
         setIsProcessing(true);
         try {
+          // 1. Chiude l'attività
           await supabase
             .from("attivita")
             .update({ stato: "CHIUSA" })
             .eq("id", id);
           await createLog("CHIUDI_ATTIVITA", `Chiusa attività: ${tipo}`);
-          fetchAttivita(); // Rafraîchit la liste
+
+          // 2. LOGICA AUTOMATICA ASSENZE (Solo per i membri)
+          // Ottiene i giorni unici di attività dallo storico passaggi
+          const giorniDiAttivita = [
+            ...new Set(
+              storicoPassaggi.map((p) => {
+                const d = new Date(p.scanned_at);
+                return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+              })
+            ),
+          ];
+
+          // Filtra ESCLUSIVAMENTE i membri con stato ATTIVO
+          const membriAttivi = membres.filter((m) => 
+            m.stato?.toUpperCase() === "ATTIVO" &&
+            ["VOLONTARIO", "PASSIVO"].includes(m.tipologia_socio?.toUpperCase())
+          );
+
+          for (const m of membriAttivi) {
+            const dateIscrizione = m.created_at
+              ? new Date(m.created_at).setHours(0, 0, 0, 0)
+              : 0;
+            const fullName = `${m.nome} ${m.cognome}`.toLowerCase();
+
+            // Calcola le presenze effettive
+            const presenze = new Set(
+              storicoPassaggi
+                .filter((p) => p.nome_cognome?.toLowerCase() === fullName)
+                .map((p) => {
+                  const d = new Date(p.scanned_at);
+                  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+                })
+            ).size;
+
+            // Calcola le attività valide SOLO da quando è iscritto
+            const attivitaValide = giorniDiAttivita.filter((dateStr) => {
+              const [anno, mese, giorno] = dateStr.split("-");
+              return (
+                new Date(anno, mese - 1, giorno).setHours(0, 0, 0, 0) >=
+                dateIscrizione
+              );
+            }).length;
+
+            // Assenze totali
+            const assenze = attivitaValide > presenze ? attivitaValide - presenze : 0;
+
+            // 3. AZIONI AUTOMATICHE (Email e Sospensione)
+            if (assenze === 6 && !m.avviso_inviato) {
+              // Invia email di avviso giallo
+              await fetch("/api/notify-absence", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ type: "WARNING", email: m.email, nome: m.nome }),
+              });
+              // Aggiorna il DB per non inviare l'email due volte
+              await supabase.from("membres").update({ avviso_inviato: true }).eq("id", m.id);
+              await createLog("AVVISO_ASSENZE", `Inviato avviso per 6 assenze`, m.id, `${m.nome} ${m.cognome}`);
+            } 
+            else if (assenze >= 7 && !m.sospensione_inviata) {
+              // Invia email di sospensione rossa
+              await fetch("/api/notify-absence", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ type: "SUSPENSION", email: m.email, nome: m.nome }),
+              });
+              // Aggiorna il DB: Stato diventa SOSPESO e blocchiamo future email
+              await supabase.from("membres").update({ 
+                stato: "SOSPESO", 
+                sospensione_inviata: true 
+              }).eq("id", m.id);
+              await createLog("SOSPENSIONE_AUTOMATICA", `Sospeso automaticamente per 7 assenze`, m.id, `${m.nome} ${m.cognome}`);
+            }
+          }
+
+          // 4. Aggiorna l'interfaccia dopo i calcoli
+          fetchAttivita(); 
+          fetchMembres(); // Scarica di nuovo i membri per vedere subito i nuovi SOSPESI nella lista
         } catch (err) {
           console.error(err);
         } finally {
@@ -628,28 +705,41 @@ export default function Dashboard() {
           59,
           59,
         ).toISOString();
+        
         const { data: logs } = await supabase
           .from("logs")
           .select("*")
           .gte("created_at", firstDay)
           .lte("created_at", lastDay)
           .order("created_at", { ascending: true });
+          
         if (logs && logs.length > 0) {
           const monthName = monthsList[monthIdx].toUpperCase();
           let content = `REGISTRO UNISP - ${monthName} ${year}\n\n`;
           logs.forEach((l) => {
             content += `[${new Date(l.created_at).toLocaleString()}] ${l.action}\nOP: ${l.operator_name}\nDETTAGLI: ${l.details}\n${l.target_name ? `TARGET: ${l.target_name}\n` : ""}---\n`;
           });
+          
           const blob = new Blob([content], { type: "text/plain" });
           const url = URL.createObjectURL(blob);
           const link = document.createElement("a");
           link.href = url;
           link.download = `LOG_${monthName}.txt`;
 
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+          URL.revokeObjectURL(url);
+
           await createLog(
             "EXPORT_LOGS",
             `Esportati i registri di sicurezza per il mese di ${monthName} ${year}`,
           );
+
+          // Pause de 1,2 secondes pour laisser le temps au navigateur de digérer chaque téléchargement individuel
+          if (selectedMonths.length > 1) {
+            await new Promise((resolve) => setTimeout(resolve, 1200));
+          }
         }
       }
     } finally {

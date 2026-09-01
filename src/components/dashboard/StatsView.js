@@ -212,15 +212,15 @@ export default function StatsView({
         const assenze =
           attivitaValide > presenze ? attivitaValide - presenze : 0;
 
-        // Calcul du pourcentage pour la jauge visuelle (5 absences = barre pleine à 100%)
-        const perc = Math.min((assenze / 5) * 100, 100);
+        // Calcolo della percentuale per la barra visiva (7 assenze = barra al 100%)
+        const perc = Math.min((assenze / 7) * 100, 100);
 
         return { ...m, assenze, perc };
       });
 
     // 3. Ne garder que ceux qui ont au moins 1 absence et trier du pire au meilleur
     return stats
-      .filter((m) => m.assenze >= 3)
+      .filter((m) => m.assenze >= 7)
       .sort((a, b) => b.assenze - a.assenze);
   }, [membres, passaggi]);
 
@@ -307,7 +307,7 @@ export default function StatsView({
                     <span className="text-white">{m.nome}</span>
                     <span
                       className={
-                        m.assenze >= 5
+                        m.assenze >= 7
                           ? "text-red-500 animate-pulse"
                           : "text-yellow-500"
                       }
@@ -317,7 +317,7 @@ export default function StatsView({
                   </div>
                   <div className="h-1.5 w-full bg-slate-800 rounded-full overflow-hidden">
                     <div
-                      className={`h-full transition-all duration-1000 ${m.assenze >= 5 ? "bg-red-600 shadow-[0_0_10px_rgba(239,68,68,0.5)]" : "bg-yellow-500"}`}
+                      className={`h-full transition-all duration-1000 ${m.assenze >= 7 ? "bg-red-600 shadow-[0_0_10px_rgba(239,68,68,0.5)]" : "bg-yellow-500"}`}
                       style={{ width: `${m.perc}%` }}
                     />
                   </div>

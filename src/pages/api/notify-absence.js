@@ -1,12 +1,15 @@
 import nodemailer from 'nodemailer';
 
 export default async function handler(req, res) {
+  // Verifica che il metodo sia POST
   if (req.method !== 'POST') return res.status(405).json({ message: 'Metodo non consentito' });
 
   const { type, email, nome } = req.body;
 
+  // Controllo presenza email
   if (!email) return res.status(400).json({ message: 'Email mancante' });
 
+  // Configurazione del trasportatore email
   const transporter = nodemailer.createTransport({
     service: 'gmail',
     auth: {
@@ -15,21 +18,22 @@ export default async function handler(req, res) {
     },
   });
 
-  // Configurazione dei messaggi in base al tipo (4 o 5 assenze)
+  // Configurazione dei messaggi in base al tipo (6 o 7 assenze)
   const isSuspension = type === "SUSPENSION";
   
   const subject = isSuspension 
     ? `AVVISO IMPORTANTE: Sospensione Account UNISP - ${nome}`
     : `Promemoria Assenze UNISP - ${nome}`;
 
+  // Creazione del contenuto HTML in base al tipo di notifica
   const htmlContent = isSuspension ? `
     <div style="font-family: sans-serif; text-align: center; padding: 40px; background-color: #fff1f2;">
       <div style="max-width: 500px; margin: 0 auto; background: white; border-radius: 20px; padding: 30px; border: 2px solid #be123c;">
         <h1 style="color: #be123c;">Account Sospeso</h1>
         <p style="color: #444; font-size: 16px;">Ciao <strong>${nome}</strong>,</p>
-        <p style="color: #444;">Ti informiamo che hai raggiunto il limite massimo di <b>5 assenze</b>.</p>
+        <p style="color: #444;">Ti informiamo che hai raggiunto il limite massimo di <b>7 assenze</b>.</p>
         <p style="background: #be123c; color: white; padding: 15px; border-radius: 10px; font-weight: bold;">
-          Il tuo QR Code è stato disattivato automaticamente.
+          Il tuo stato è ora SOSPESO e il tuo QR Code è stato disattivato.
         </p>
         <p style="color: #666; font-size: 13px; margin-top: 20px;">
           Per riattivare la tua iscrizione, ti preghiamo di contattare lo staff dell'UNISP.
@@ -41,18 +45,19 @@ export default async function handler(req, res) {
       <div style="max-width: 500px; margin: 0 auto; background: white; border-radius: 20px; padding: 30px; border: 2px solid #eab308;">
         <h1 style="color: #854d0e;">Avviso Assenze</h1>
         <p style="color: #444; font-size: 16px;">Ciao <strong>${nome}</strong>,</p>
-        <p style="color: #444;">Abbiamo registrato <b>4 assenze</b> a tuo nome.</p>
+        <p style="color: #444;">Abbiamo registrato <b>6 assenze</b> a tuo nome.</p>
         <p style="color: #854d0e; font-weight: bold;">
-          Attenzione: alla prossima assenza (la quinta), il tuo stato verrà SOSPESO automaticamente.
+          Attenzione: alla prossima assenza (la settima), il tuo stato verrà SOSPESO automaticamente.
         </p>
         <p style="color: #666; font-size: 13px; margin-top: 20px;">
-          Ti aspettiamo alla prossima attività !
+          Ti aspettiamo alla prossima attività!
         </p>
       </div>
     </div>
   `;
 
   try {
+    // Invio effettivo dell'email
     await transporter.sendMail({
       from: `"STAFF UNISP" <${process.env.EMAIL_USER}>`,
       to: email,
